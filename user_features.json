@@ -1,0 +1,29 @@
+[
+  {
+    "name": "age",
+    "type": "numerical",
+    "min": 18,
+    "max": 80
+  },
+  {
+    "name": "gender",
+    "type": "categorical",
+    "categories": [0, 1, 2, 3, 4]
+  },
+  {
+    "name": "location",
+    "type": "categorical",
+    "categories": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  },
+  {
+    "name": "device_type",
+    "type": "categorical",
+    "categories": [0, 1, 2]
+  },
+  {
+    "name": "average_session_length",
+    "type": "numerical",
+    "min": 1,
+    "max": 60
+  }
+]

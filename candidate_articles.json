@@ -1,0 +1,92 @@
+[
+    {
+      "id": 1,
+      "headline": "Global Climate Summit Reaches Landmark Agreement on Emissions Reduction",
+      "subheadline": "World leaders commit to 50% cut in greenhouse gas emissions by 2030",
+      "author": "Emma Green",
+      "publishDate": "2023-11-15T09:30:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/climate-summit-2023.jpg"
+    },
+    {
+      "id": 2,
+      "headline": "Tech Giant Unveils Revolutionary Quantum Computing Chip",
+      "subheadline": "New processor promises to solve complex problems in minutes, not years",
+      "author": "Alex Quantum",
+      "publishDate": "2023-11-14T14:45:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/quantum-chip-reveal.jpg"
+    },
+    {
+      "id": 3,
+      "headline": "Stock Market Soars as Economic Recovery Gains Momentum",
+      "subheadline": "Dow Jones hits record high amid positive job growth and consumer spending data",
+      "author": "Michael Finance",
+      "publishDate": "2023-11-14T16:20:00Z",
+      "category": "Business",
+      "thumbnailUrl": "https://news-images.com/stock-market-bull.jpg"
+    },
+    {
+      "id": 4,
+      "headline": "Breakthrough in Cancer Research: New Immunotherapy Shows Promising Results",
+      "subheadline": "Clinical trials report 80% success rate in treating aggressive forms of leukemia",
+      "author": "Dr. Sarah Health",
+      "publishDate": "2023-11-13T11:00:00Z",
+      "category": "Health",
+      "thumbnailUrl": "https://news-images.com/cancer-research-lab.jpg"
+    },
+    {
+      "id": 5,
+      "headline": "Major Cybersecurity Breach Affects Millions of Users Worldwide",
+      "subheadline": "Hackers gain access to personal data from popular social media platforms",
+      "author": "Chris Secure",
+      "publishDate": "2023-11-13T08:15:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/cybersecurity-lock.jpg"
+    },
+    {
+      "id": 6,
+      "headline": "SpaceX Successfully Launches First Civilian Mission to Mars",
+      "subheadline": "Billionaire-funded expedition marks new era in space exploration",
+      "author": "Stella Cosmos",
+      "publishDate": "2023-11-12T19:45:00Z",
+      "category": "Science",
+      "thumbnailUrl": "https://news-images.com/spacex-mars-mission.jpg"
+    },
+    {
+      "id": 7,
+      "headline": "Global Food Prices Hit 10-Year High Amid Supply Chain Disruptions",
+      "subheadline": "UN warns of potential food crisis in developing countries",
+      "author": "Robert Economics",
+      "publishDate": "2023-11-12T13:30:00Z",
+      "category": "Economy",
+      "thumbnailUrl": "https://news-images.com/food-prices-chart.jpg"
+    },
+    {
+      "id": 8,
+      "headline": "Artificial Intelligence Defeats World Chess Champion in Historic Match",
+      "subheadline": "DeepMind's latest AI showcases unprecedented strategic thinking",
+      "author": "Ava Intelligence",
+      "publishDate": "2023-11-11T22:00:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/ai-chess-victory.jpg"
+    },
+    {
+      "id": 9,
+      "headline": "New Study Reveals Alarming Rate of Arctic Ice Melt",
+      "subheadline": "Scientists predict ice-free summers in the Arctic by 2040",
+      "author": "Dr. Frost Iceman",
+      "publishDate": "2023-11-11T10:15:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/arctic-ice-melt.jpg"
+    },
+    {
+      "id": 10,
+      "headline": "Global Peace Index Shows Decline for Fifth Consecutive Year",
+      "subheadline": "Experts cite rising geopolitical tensions and economic instability",
+      "author": "Olivia Peacekeeper",
+      "publishDate": "2023-11-10T16:45:00Z",
+      "category": "World",
+      "thumbnailUrl": "https://news-images.com/peace-index-2023.jpg"
+    }
+]

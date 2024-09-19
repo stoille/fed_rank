@@ -1,0 +1,58 @@
+[
+  {
+    "name": "category",
+    "type": "categorical",
+    "categories": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  },
+  {
+    "name": "subcategory",
+    "type": "categorical",
+    "categories": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+  },
+  {
+    "name": "author_id",
+    "type": "categorical",
+    "categories": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  },
+  {
+    "name": "publish_time",
+    "type": "numerical",
+    "min": 0,
+    "max": 24
+  },
+  {
+    "name": "word_count",
+    "type": "numerical",
+    "min": 100,
+    "max": 2000
+  },
+  {
+    "name": "contains_video",
+    "type": "categorical",
+    "categories": [0, 1]
+  },
+  {
+    "name": "contains_image",
+    "type": "categorical",
+    "categories": [0, 1]
+  },
+  {
+    "name": "average_word_length",
+    "type": "numerical",
+    "min": 3,
+    "max": 8
+  },
+  {
+    "name": "sentiment_score",
+    "type": "numerical",
+    "min": -1,
+    "max": 1
+  },
+  {
+    "name": "topic_vector",
+    "type": "numerical",
+    "min": -1,
+    "max": 1,
+    "dimension": 85
+  }
+]
