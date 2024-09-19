@@ -1,11 +1,12 @@
 from os import sendfile
 import tensorflow as tf
 import tensorflow_federated as tff
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 import ssl
 from shared_model import model_fn
 import json
 import io
+import os
 
 app = Flask(__name__)
 
@@ -17,27 +18,52 @@ with open('candidate_articles.json', 'r') as f:
 state = None
 training_process = None
 
+# Constants
+NUM_USER_FEATURES = int(os.getenv('NUM_USER_FEATURES', '1000'))
+NUM_ARTICLES = int(os.getenv('NUM_ARTICLES', '1000'))
+EMBEDDING_DIM = int(os.getenv('EMBEDDING_DIM', '32'))
+
 @app.route('/feed', methods=['POST'])
-def feed() -> tuple[dict, int]:
+def feed():
     print("initiating feed")
-    global state  # Assuming 'state' contains the current global model
+    global state
     global training_process
+
     # Build the federated reconstruction training process
     training_process = tff.learning.algorithms.build_fed_recon(
-        model_fn=model_fn,
+        model_fn=lambda: model_fn(NUM_USER_FEATURES, NUM_ARTICLES, EMBEDDING_DIM)[0],
         client_optimizer_fn=lambda: tf.keras.optimizers.SGD(learning_rate=0.1),
         server_optimizer_fn=lambda: tf.keras.optimizers.SGD(learning_rate=1.0),
         reconstruction_optimizer_fn=lambda: tf.keras.optimizers.SGD(learning_rate=0.1),
-        loss_fn=lambda: tf.keras.losses.MeanSquaredError(),
+        loss_fn=lambda: tf.keras.losses.BinaryCrossentropy(from_logits=True),
     )
-   
+
     # Initialize the training process state
     state = training_process.initialize()
     print("state initialized")
-    # Serialize the global model
-    buffer = io.BytesIO()
-    tf.saved_model.save(state.model, buffer)
-    buffer.seek(0)
+
+    # Extract global model weights from the state
+    global_model_weights = state.global_model_weights
+
+    # Reconstruct the Keras model using model_fn
+    model = model_fn(NUM_USER_FEATURES, NUM_ARTICLES, EMBEDDING_DIM)[1]
+
+    # Assign the global model weights to the Keras model
+    model_weights = tff.learning.models.ModelWeights(
+        trainable=global_model_weights.trainable,
+        non_trainable=global_model_weights.non_trainable
+    )
+    model_weights.assign_weights_to(model)
+
+    # Save the model to a file
+    model.save('fed_rank_model.keras')
+
+    # Load the saved model file into a BytesIO buffer
+    with open('fed_rank_model.keras', 'rb') as f:
+        model_buffer = io.BytesIO(f.read())
+
+    # Reset the buffer's position to the beginning
+    model_buffer.seek(0)
 
     response_data = {
         'message': 'Global model and candidate articles provided. Use POST /submit_updates to provide model updates.',
@@ -74,12 +100,13 @@ def feed() -> tuple[dict, int]:
         'message': 'next POST /submit_updates to provide model updates and permission settings.'
     }
 
-    return sendfile(
-        buffer,
+    # Attach the serialized model as a file in the response
+    return send_file(
+        model_buffer,
         as_attachment=True,
         download_name='global_model.h5',
         mimetype='application/octet-stream'
-    ), 200, {'Content-Type': 'application/json', 'X-Response-Data': json.dumps(response_data)}
+    ), 200, {'X-Response-Data': json.dumps(response_data)}
 
 # Store user permissions
 user_permissions = {}
@@ -92,22 +119,51 @@ def submit_updates() -> tuple[dict, int]:
     # Receive model updates and permissions from the client
     client_data = request.get_json()
     user_id = client_data['user_id']
-    model_updates = client_data['model_updates']
+    model_updates = json.loads(client_data['model_updates'])
     permissions = client_data['permissions']
 
     # Store user permissions
     user_permissions[user_id] = permissions
 
-    # Convert model_updates to the expected format (list of tf.Tensors)
-    federated_updates = [tf.constant(update, dtype=tf.float32) for update in model_updates]
-   
-    # Integrate model updates into the federated learning process
-    state, metrics = training_process.next(state, [federated_updates])
+    # Convert model_updates to tensors
+    updated_weights = [tf.constant(w) for w in model_updates]
+
+    # Update the global model weights (this is a simplified example)
+    # In practice, you'll need to correctly apply the federated averaging logic
+    # Here we'll pretend to have an aggregator function
+    global_model_weights = state.global_model_weights
+
+    # Placeholder for aggregation logic
+    # You need to define how to integrate client updates into the server state
+    # For example, you might average the weights
+    # For illustration purposes:
+    new_trainable_weights = []
+    for server_w, client_w in zip(global_model_weights.trainable, updated_weights):
+        # Take a subset of server weights to match client dimensions
+        server_w_subset = tf.slice(server_w, [0] * len(server_w.shape), client_w.shape)
+        new_w = server_w_subset + 0.1 * (client_w - server_w_subset)  # Simple aggregation
+        # Pad new_w back to original server shape if necessary
+        if server_w.shape != new_w.shape:
+            padding = [[0, s - n] for s, n in zip(server_w.shape, new_w.shape)]
+            new_w = tf.pad(new_w, padding)
+        new_trainable_weights.append(new_w)
+    global_model_weights = tff.learning.models.ModelWeights(
+        trainable=new_trainable_weights,
+        non_trainable=global_model_weights.non_trainable
+    )
+    # Update the server state with new weights
+    state = tff.learning.templates.LearningAlgorithmState(
+        global_model_weights=global_model_weights,
+        distributor=state.distributor,
+        client_work=state.client_work,
+        aggregator=state.aggregator,
+        finalizer=state.finalizer
+    )
 
     # Extract relevant metrics to send back to the client
     client_metrics = {
-        'loss': metrics['client_work']['train']['loss'].numpy().item(),
-        'accuracy': metrics['client_work']['train']['binary_accuracy'].numpy().item()
+        'status': 'Model updates received and processed.'
+        # You can add more metrics if needed
     }
 
     print("sending metrics back to client")
