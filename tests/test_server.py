@@ -2,7 +2,10 @@ import unittest
 import json
 import os
 import numpy as np
-from server import app
+import tensorflow as tf
+from server import app, rank_articles
+import io
+import tempfile
 
 class TestServer(unittest.TestCase):
 
@@ -32,28 +35,79 @@ class TestServer(unittest.TestCase):
         """
         Test the /submit_updates route with sample data.
         """
-        # Generate model updates with shapes matching the subset of server weights
+        # Create a simple mock Keras model
         num_user_features = int(os.getenv('NUM_USER_FEATURES', '1000'))
         num_articles = int(os.getenv('NUM_ARTICLES', '1000'))
         embedding_dim = int(os.getenv('EMBEDDING_DIM', '32'))
-        
-        weight_shapes = [
-            (num_articles, embedding_dim),  # Shape of article embedding layer
-            (embedding_dim,)                # Shape of bias or other weights
-        ]
-        model_updates = [np.random.rand(*shape).tolist() for shape in weight_shapes]
 
-        sample_data = {
-            'user_id': 'test_user',
-            'model_updates': json.dumps(model_updates),
-            'permissions': {'essential': True}
-        }
-        response = self.app.post('/submit_updates', data=json.dumps(sample_data),
-                                 content_type='application/json')
+        article_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='article_input')
+        user_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='user_input')
+        
+        article_embedding = tf.keras.layers.Embedding(num_articles, embedding_dim)(article_input)
+        user_embedding = tf.keras.layers.Embedding(num_user_features, embedding_dim)(user_input)
+        
+        article_flatten = tf.keras.layers.Flatten()(article_embedding)
+        user_flatten = tf.keras.layers.Flatten()(user_embedding)
+        
+        dot_product = tf.keras.layers.Dot(axes=1)([user_flatten, article_flatten])
+        
+        mock_model = tf.keras.Model(inputs=[article_input, user_input], outputs=dot_product)
+
+        # Save the mock model to a temporary file
+        with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp:
+            mock_model.save(tmp.name)
+            tmp_model_path = tmp.name
+
+        # Prepare the data for the request
+        with open(tmp_model_path, 'rb') as model_file:
+            sample_data = {
+                'user_id': 'test_user',
+                'permissions': json.dumps({'essential': True}),
+                'model': (model_file, 'model.keras')
+            }
+
+            response = self.app.post('/submit_updates', 
+                                     data=sample_data,
+                                     content_type='multipart/form-data')
+        
+        # Clean up the temporary file
+        os.unlink(tmp_model_path)
+        
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertEqual(data['status'], 'success')
         self.assertIn('metrics', data)
+
+    def test_rank_articles(self):
+        # Create a simple mock model
+        article_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='article_input')
+        user_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='user_input')
+        concatenated = tf.keras.layers.Concatenate()([article_input, user_input])
+        output = tf.keras.layers.Dense(1)(concatenated)
+        mock_model = tf.keras.Model(inputs={'article_input': article_input, 'user_input': user_input}, outputs=output)
+
+        # Create mock candidate articles in the same format as candidate_articles.json
+        mock_candidate_articles = [
+            {
+                "id": f"article_{i}",
+                "headline": f"Headline {i}",
+                "category": "Technology",
+                "author": f"Author {i}",
+                "content": f"This is the content of article {i}.",
+                "publication_date": "2023-05-01",
+                "url": f"https://example.com/article_{i}"
+            } for i in range(10)
+        ]
+
+        # Rank articles
+        ranked_results = rank_articles(mock_model, mock_candidate_articles)
+
+        # Check if the results are correctly formatted
+        self.assertEqual(len(ranked_results), 10)
+        self.assertIsInstance(ranked_results[0], tuple)
+        self.assertEqual(len(ranked_results[0]), 2)
+        self.assertIsInstance(ranked_results[0][0], str)
+        self.assertIsInstance(ranked_results[0][1], float)
 
     def tearDown(self):
         """

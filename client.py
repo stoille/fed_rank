@@ -38,29 +38,7 @@ def prepare_local_data(candidate_articles):
     
     return dataset
 
-def train_local_model(model: tf.keras.Model, train_data):
-    # Check if running on M1/M2 Mac
-    is_m1_mac = platform.processor() == 'arm'
-    
-    if is_m1_mac:
-        optimizer = tf.keras.optimizers.legacy.SGD(learning_rate=0.01)
-    else:
-        optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
-    
-    loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
-
-    # Training loop
-    for epoch in range(10):  # Adjust the number of epochs as needed
-        for (batch_article_indices, batch_article_lengths), batch_labels in train_data:
-            with tf.GradientTape() as tape:
-                # Pass both inputs to the model
-                predictions = model(
-                    [batch_article_indices, batch_article_lengths], training=True
-                )
-                loss = loss_fn(batch_labels, predictions)
-            gradients = tape.gradient(loss, model.trainable_weights)
-            optimizer.apply_gradients(zip(gradients, model.trainable_weights))
-
+def rank_articles(model, candidate_articles):
     # Prepare test data for inference
     article_id_to_index = {
         article['id']: idx for idx, article in enumerate(candidate_articles)
@@ -83,13 +61,39 @@ def train_local_model(model: tf.keras.Model, train_data):
     ranked_results = sorted(
         zip(
             [article['id'] for article in candidate_articles],
-            predictions.flatten()
+            predictions.flatten().astype(float)
         ),
         key=lambda x: x[1],
         reverse=True
     )
 
-    return model.get_weights(), ranked_results
+    return ranked_results
+
+def train_local_model(model: tf.keras.Model, train_data: tf.data.Dataset):
+    # Check if running on M1/M2 Mac
+    is_m1_mac = platform.processor() == 'arm'
+    
+    if is_m1_mac:
+        optimizer = tf.keras.optimizers.legacy.SGD(learning_rate=0.01)
+    else:
+        optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
+    
+    loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+
+    # Training loop
+    for epoch in range(10):  # Adjust the number of epochs as needed
+        for (batch_article_indices, batch_article_lengths), batch_labels in train_data:
+            with tf.GradientTape() as tape:
+                # Pass both inputs to the model
+                predictions = model(
+                    [batch_article_indices, batch_article_lengths], training=True
+                )
+                loss = loss_fn(batch_labels, predictions)
+            gradients = tape.gradient(loss, model.trainable_weights)
+            optimizer.apply_gradients(zip(gradients, model.trainable_weights))
+
+    # After training, return the updated model
+    return model
 
 if __name__ == '__main__':
     user_id = str(uuid.uuid4())
@@ -121,11 +125,17 @@ if __name__ == '__main__':
     # Ask user for permissions based on server's request in response_data (if necessary)
     permissions = json.dumps({"essential": True, "functional": True})
    
-    # Train the local model and get updates and rankings
-    model_updates, ranked_results = train_local_model(model, train_data)
+    # Train the model
+    updated_model = train_local_model(model, train_data)
+
+    # Get model updates
+    model_updates = updated_model.get_weights()
+
+    # Rank the articles
+    ranked_results = rank_articles(updated_model, candidate_articles)
 
     # Save the model to a file
-    model.save('local_model.keras')
+    updated_model.save('local_model.keras')
 
     # Load the saved model file into a BytesIO buffer
     with open('local_model.keras', 'rb') as f:

@@ -32,7 +32,7 @@ TOP_K = 10  # Define K for Precision@K and Recall@K
 
 # Global variables to store client updates
 client_updates_list = []
-NUM_CLIENTS_PER_ROUND = 1  # Adjust this number based on your requirements
+NUM_CLIENTS_PER_ROUND = 3  # Adjust this number based on your requirements
 
 @app.route('/feed', methods=['POST'])
 def feed():
@@ -257,6 +257,7 @@ def submit_updates() -> tuple[dict, int]:
     global_model_loss = None
     global_model_accuracy = None
     recommender_metrics = {}
+    ranked_results = []
 
     # Check if enough client updates have been collected to perform aggregation
     if len(client_updates_list) >= NUM_CLIENTS_PER_ROUND:
@@ -298,10 +299,14 @@ def submit_updates() -> tuple[dict, int]:
         
         # Evaluate the updated global model on a validation dataset
         validation_dataset = load_validation_data()
-        model.evaluate(validation_dataset, verbose=0)
+        evaluation_results = model.evaluate(validation_dataset, verbose=0)
+        global_model_loss, global_model_accuracy = evaluation_results
 
         # Compute recommender system metrics
         recommender_metrics = compute_recommender_metrics(model, validation_dataset)
+
+        # Rank articles
+        ranked_results = rank_articles(model, candidate_articles)
 
         # Extract global model weights from the updated model
         global_model_weights = tff.learning.models.ModelWeights.from_model(model)
@@ -327,6 +332,7 @@ def submit_updates() -> tuple[dict, int]:
         'global_model_precision_at_k': recommender_metrics.get('precision_at_k'),
         'global_model_recall_at_k': recommender_metrics.get('recall_at_k'),
         'global_model_ndcg_at_k': recommender_metrics.get('ndcg_at_k'),
+        'ranked_results': ranked_results[:10]  # Send top 10 ranked articles
     }
 
     print("sending metrics back to client")
@@ -336,6 +342,33 @@ def submit_updates() -> tuple[dict, int]:
         'message': 'Model updates received and processed.',
         'metrics': client_metrics
     }), 200
+
+def rank_articles(model, candidate_articles):
+    article_id_to_index = {
+        article['id']: idx for idx, article in enumerate(candidate_articles)
+    }
+    test_article_indices = [
+        article_id_to_index[article['id']] for article in candidate_articles
+    ]
+    test_article_lengths = [len(article['headline']) for article in candidate_articles]
+    
+    test_article_indices_tensor = tf.constant(test_article_indices, dtype=tf.int32)
+    test_article_lengths_tensor = tf.constant(test_article_lengths, dtype=tf.float32)
+    
+    predictions = model.predict(
+        {'article_input': test_article_indices_tensor, 'user_input': np.zeros((len(candidate_articles), 1))}
+    )
+
+    ranked_results = sorted(
+        zip(
+            [article['id'] for article in candidate_articles],
+            predictions.flatten().astype(float)
+        ),
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    return ranked_results
 
 if __name__ == '__main__':
     # Set up SSL context for HTTPS
