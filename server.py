@@ -7,6 +7,9 @@ from shared_model import model_fn
 import json
 import io
 import os
+from tensorflow_federated.python.core.backends.native import execution_contexts
+from tensorflow import keras
+import tempfile
 
 app = Flask(__name__)
 
@@ -37,6 +40,9 @@ def feed():
         reconstruction_optimizer_fn=lambda: tf.keras.optimizers.SGD(learning_rate=0.1),
         loss_fn=lambda: tf.keras.losses.BinaryCrossentropy(from_logits=True),
     )
+    
+    # Set the local Python execution context
+    execution_contexts.set_sync_local_cpp_execution_context()
 
     # Initialize the training process state
     state = training_process.initialize()
@@ -56,10 +62,10 @@ def feed():
     model_weights.assign_weights_to(model)
 
     # Save the model to a file
-    model.save('fed_rank_model.keras')
+    model.save('global_model.keras')
 
     # Load the saved model file into a BytesIO buffer
-    with open('fed_rank_model.keras', 'rb') as f:
+    with open('global_model.keras', 'rb') as f:
         model_buffer = io.BytesIO(f.read())
 
     # Reset the buffer's position to the beginning
@@ -104,7 +110,7 @@ def feed():
     return send_file(
         model_buffer,
         as_attachment=True,
-        download_name='global_model.h5',
+        download_name='global_model.keras',
         mimetype='application/octet-stream'
     ), 200, {'X-Response-Data': json.dumps(response_data)}
 
@@ -116,21 +122,28 @@ def submit_updates() -> tuple[dict, int]:
     global state
     global training_process
     print("submitting updates")
+    
     # Receive model updates and permissions from the client
-    client_data = request.get_json()
-    user_id = client_data['user_id']
-    model_updates = json.loads(client_data['model_updates'])
-    permissions = client_data['permissions']
-
+    user_id = request.form['user_id']
+    permissions = json.loads(request.form['permissions'])
+    
     # Store user permissions
     user_permissions[user_id] = permissions
 
-    # Convert model_updates to tensors
-    updated_weights = [tf.constant(w) for w in model_updates]
+    # Save the uploaded file to a temporary directory
+    model_file = request.files['model']
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_model_path = os.path.join(temp_dir, 'local_model.keras')
+        model_file.save(temp_model_path)
+        
+        # Load the model using tff.learning.models.load()
+        updated_model = keras.models.load_model(temp_model_path)
+
+    # Extract weights from the updated model
+    updated_weights = updated_model.get_weights()
 
     # Update the global model weights (this is a simplified example)
     # In practice, you'll need to correctly apply the federated averaging logic
-    # Here we'll pretend to have an aggregator function
     global_model_weights = state.global_model_weights
 
     # Placeholder for aggregation logic
@@ -147,10 +160,12 @@ def submit_updates() -> tuple[dict, int]:
             padding = [[0, s - n] for s, n in zip(server_w.shape, new_w.shape)]
             new_w = tf.pad(new_w, padding)
         new_trainable_weights.append(new_w)
+    
     global_model_weights = tff.learning.models.ModelWeights(
         trainable=new_trainable_weights,
         non_trainable=global_model_weights.non_trainable
     )
+    
     # Update the server state with new weights
     state = tff.learning.templates.LearningAlgorithmState(
         global_model_weights=global_model_weights,
