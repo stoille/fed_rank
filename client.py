@@ -42,7 +42,7 @@ def train_local_model(model: tf.keras.Model, train_data):
     loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
     # Training loop
-    for epoch in range(1):  # Adjust the number of epochs as needed
+    for epoch in range(10):  # Adjust the number of epochs as needed
         for (batch_article_indices, batch_article_lengths), batch_labels in train_data:
             with tf.GradientTape() as tape:
                 # Pass both inputs to the model
@@ -141,7 +141,7 @@ if __name__ == '__main__':
                              data=client_data, 
                              files=files, 
                              verify='cert.pem')
-    print(response.reason)
+    print(response.content)
 
     # Display top 10 ranked results
     print("\nTop 10 Ranked Results:")

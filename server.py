@@ -10,6 +10,8 @@ import os
 from tensorflow_federated.python.core.backends.native import execution_contexts
 from tensorflow import keras
 import tempfile
+import numpy as np
+import heapq  # For retrieving top K items
 
 app = Flask(__name__)
 
@@ -25,6 +27,11 @@ training_process = None
 NUM_USER_FEATURES = int(os.getenv('NUM_USER_FEATURES', '1000'))
 NUM_ARTICLES = int(os.getenv('NUM_ARTICLES', '1000'))
 EMBEDDING_DIM = int(os.getenv('EMBEDDING_DIM', '32'))
+TOP_K = 10  # Define K for Precision@K and Recall@K
+
+# Global variables to store client updates
+client_updates_list = []
+NUM_CLIENTS_PER_ROUND = 1  # Adjust this number based on your requirements
 
 @app.route('/feed', methods=['POST'])
 def feed():
@@ -117,10 +124,102 @@ def feed():
 # Store user permissions
 user_permissions = {}
 
+def load_validation_data():
+    """
+    Load or generate validation data that includes user interactions.
+    """
+    # Example validation data with user IDs, article IDs, and labels indicating interactions
+    num_samples = 1000
+    user_ids = np.random.randint(0, NUM_USER_FEATURES, size=(num_samples, 1))
+    article_ids = np.random.randint(0, NUM_ARTICLES, size=(num_samples, 1))
+    labels = np.random.randint(0, 2, size=(num_samples, 1))  # 1 if the user interacted with the article, else 0
+
+    dataset = tf.data.Dataset.from_tensor_slices((
+        {'user_input': user_ids, 'article_input': article_ids},
+        labels
+    ))
+    dataset = dataset.batch(32).prefetch(tf.data.AUTOTUNE)
+    return dataset
+
+def compute_recommender_metrics(model, validation_dataset):
+    """
+    Compute recommender system metrics.
+    """
+    all_labels = []
+    all_predictions = []
+    all_user_ids = []
+    all_article_ids = []
+
+    for batch in validation_dataset:
+        inputs, labels = batch
+        predictions = model.predict(inputs, verbose=0).flatten()
+        all_labels.extend(labels.numpy().flatten())
+        all_predictions.extend(predictions)
+        all_user_ids.extend(inputs['user_input'].numpy().flatten())
+        all_article_ids.extend(inputs['article_input'].numpy().flatten())
+
+    # Organize data by user
+    user_data = {}
+    for user_id, article_id, label, prediction in zip(all_user_ids, all_article_ids, all_labels, all_predictions):
+        if user_id not in user_data:
+            user_data[user_id] = {'labels': {}, 'predictions': {}}
+        user_data[user_id]['labels'][article_id] = label
+        user_data[user_id]['predictions'][article_id] = prediction
+
+    # Compute metrics
+    precision_at_k = []
+    recall_at_k = []
+    ndcg_at_k = []
+
+    for user_id, data in user_data.items():
+        labels = data['labels']
+        predictions = data['predictions']
+
+        # Get the list of articles sorted by predicted score
+        ranked_articles = sorted(predictions.items(), key=lambda x: x[1], reverse=True)
+        top_k_articles = [article_id for article_id, _ in ranked_articles[:TOP_K]]
+
+        # Relevant articles are those with label == 1
+        relevant_articles = [article_id for article_id, label in labels.items() if label == 1]
+
+        # Compute Precision@K
+        num_relevant_in_top_k = sum([1 for article_id in top_k_articles if labels.get(article_id, 0) == 1])
+        precision = num_relevant_in_top_k / TOP_K if TOP_K > 0 else 0
+        precision_at_k.append(precision)
+
+        # Compute Recall@K
+        num_relevant = len(relevant_articles)
+        recall = num_relevant_in_top_k / num_relevant if num_relevant > 0 else 0
+        recall_at_k.append(recall)
+
+        # Compute NDCG@K
+        dcg = 0.0
+        idcg = 0.0
+        for i, article_id in enumerate(top_k_articles):
+            rel = labels.get(article_id, 0)
+            dcg += (2 ** rel - 1) / np.log2(i + 2)  # i + 2 because index starts at 0
+
+        # Ideal DCG
+        sorted_relevances = sorted([label for label in labels.values()], reverse=True)
+        for i, rel in enumerate(sorted_relevances[:TOP_K]):
+            idcg += (2 ** rel - 1) / np.log2(i + 2)
+
+        ndcg = dcg / idcg if idcg > 0 else 0
+        ndcg_at_k.append(ndcg)
+
+    # Aggregate metrics
+    metrics = {
+        'precision_at_k': np.mean(precision_at_k),
+        'recall_at_k': np.mean(recall_at_k),
+        'ndcg_at_k': np.mean(ndcg_at_k)
+    }
+    return metrics
+
 @app.route('/submit_updates', methods=['POST'])
 def submit_updates() -> tuple[dict, int]:
     global state
     global training_process
+    global client_updates_list
     print("submitting updates")
     
     # Receive model updates and permissions from the client
@@ -136,49 +235,82 @@ def submit_updates() -> tuple[dict, int]:
         temp_model_path = os.path.join(temp_dir, 'local_model.keras')
         model_file.save(temp_model_path)
         
-        # Load the model using tff.learning.models.load()
+        # Load the model using keras.models.load_model()
         updated_model = keras.models.load_model(temp_model_path)
 
     # Extract weights from the updated model
-    updated_weights = updated_model.get_weights()
+    client_weights = updated_model.get_weights()
 
-    # Update the global model weights (this is a simplified example)
-    # In practice, you'll need to correctly apply the federated averaging logic
-    global_model_weights = state.global_model_weights
+    # Append the client weights to the list
+    client_updates_list.append(client_weights)
 
-    # Placeholder for aggregation logic
-    # You need to define how to integrate client updates into the server state
-    # For example, you might average the weights
-    # For illustration purposes:
-    new_trainable_weights = []
-    for server_w, client_w in zip(global_model_weights.trainable, updated_weights):
-        # Take a subset of server weights to match client dimensions
-        server_w_subset = tf.slice(server_w, [0] * len(server_w.shape), client_w.shape)
-        new_w = server_w_subset + 0.1 * (client_w - server_w_subset)  # Simple aggregation
-        # Pad new_w back to original server shape if necessary
-        if server_w.shape != new_w.shape:
-            padding = [[0, s - n] for s, n in zip(server_w.shape, new_w.shape)]
-            new_w = tf.pad(new_w, padding)
-        new_trainable_weights.append(new_w)
-    
-    global_model_weights = tff.learning.models.ModelWeights(
-        trainable=new_trainable_weights,
-        non_trainable=global_model_weights.non_trainable
-    )
-    
-    # Update the server state with new weights
-    state = tff.learning.templates.LearningAlgorithmState(
-        global_model_weights=global_model_weights,
-        distributor=state.distributor,
-        client_work=state.client_work,
-        aggregator=state.aggregator,
-        finalizer=state.finalizer
-    )
+    # Initialize default metrics
+    global_model_loss = None
+    global_model_accuracy = None
+    recommender_metrics = {}
+
+    # Check if enough client updates have been collected to perform aggregation
+    if len(client_updates_list) >= NUM_CLIENTS_PER_ROUND:
+        print("Aggregating client updates...")
+        # Initialize a list to hold the aggregated weights
+        aggregated_weights = []
+
+        # Number of layers in the model
+        num_layers = len(client_updates_list[0])
+
+        # Perform federated averaging
+        for layer_idx in range(num_layers):
+            # Collect the weights for the current layer from all clients
+            layer_weights = [client_weights[layer_idx] for client_weights in client_updates_list]
+            # Convert the list to a numpy array for averaging
+            layer_weights = np.array(layer_weights)
+            # Compute the mean of the weights
+            mean_weights = np.mean(layer_weights, axis=0)
+            # Append the averaged weights to the aggregated_weights list
+            aggregated_weights.append(mean_weights)
+        
+        # Update the global model weights
+        # Reconstruct the Keras model using model_fn
+        model = model_fn(NUM_USER_FEATURES, NUM_ARTICLES, EMBEDDING_DIM)[1]
+        # Assign the aggregated weights to the model
+        model.set_weights(aggregated_weights)
+
+        # Compile the model with SGD optimizer and BinaryCrossentropy loss
+        optimizer = tf.keras.optimizers.SGD(learning_rate=0.1)
+        loss = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+        model.compile(optimizer, loss, metrics=['accuracy'])
+        
+        # Evaluate the updated global model on a validation dataset
+        validation_dataset = load_validation_data()
+        model.evaluate(validation_dataset, verbose=0)
+
+        # Compute recommender system metrics
+        recommender_metrics = compute_recommender_metrics(model, validation_dataset)
+
+        # Extract global model weights from the updated model
+        global_model_weights = tff.learning.models.ModelWeights.from_model(model)
+        
+        # Update the server state with new weights
+        state = tff.learning.templates.LearningAlgorithmState(
+            global_model_weights=global_model_weights,
+            distributor=state.distributor,
+            client_work=state.client_work,
+            aggregator=state.aggregator,
+            finalizer=state.finalizer
+        ) 
+        
+        # Clear the client updates list for the next round
+        client_updates_list = []
+        print("Global model updated.")
 
     # Extract relevant metrics to send back to the client
     client_metrics = {
-        'status': 'Model updates received and processed.'
-        # You can add more metrics if needed
+        'status': 'Model updates received and processed.',
+        'global_model_loss': global_model_loss,
+        'global_model_accuracy': global_model_accuracy,
+        'global_model_precision_at_k': recommender_metrics.get('precision_at_k'),
+        'global_model_recall_at_k': recommender_metrics.get('recall_at_k'),
+        'global_model_ndcg_at_k': recommender_metrics.get('ndcg_at_k'),
     }
 
     print("sending metrics back to client")

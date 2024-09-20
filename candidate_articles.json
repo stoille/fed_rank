@@ -88,5 +88,275 @@
       "publishDate": "2023-11-10T16:45:00Z",
       "category": "World",
       "thumbnailUrl": "https://news-images.com/peace-index-2023.jpg"
+    },
+    {
+      "id": 11,
+      "headline": "Revolutionary Gene Therapy Offers Hope for Rare Genetic Disorders",
+      "subheadline": "FDA approves groundbreaking treatment for previously incurable conditions",
+      "author": "Dr. Gene Therapist",
+      "publishDate": "2023-11-09T14:20:00Z",
+      "category": "Health",
+      "thumbnailUrl": "https://news-images.com/gene-therapy-breakthrough.jpg"
+    },
+    {
+      "id": 12,
+      "headline": "Global Renewable Energy Investment Surpasses Fossil Fuels for First Time",
+      "subheadline": "Solar and wind power lead the charge in clean energy transition",
+      "author": "Sunny Windmill",
+      "publishDate": "2023-11-08T11:30:00Z",
+      "category": "Energy",
+      "thumbnailUrl": "https://news-images.com/renewable-energy-investment.jpg"
+    },
+    {
+      "id": 13,
+      "headline": "Autonomous Vehicles Set to Revolutionize Urban Transportation",
+      "subheadline": "Major cities announce plans to integrate self-driving cars into public transit systems",
+      "author": "Auto Pilot",
+      "publishDate": "2023-11-07T09:45:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/autonomous-vehicles-city.jpg"
+    },
+    {
+      "id": 14,
+      "headline": "Global Education Initiative Aims to Bridge Digital Divide",
+      "subheadline": "UN partners with tech giants to provide internet access and devices to underserved communities",
+      "author": "Edu Connect",
+      "publishDate": "2023-11-06T15:10:00Z",
+      "category": "Education",
+      "thumbnailUrl": "https://news-images.com/digital-education-initiative.jpg"
+    },
+    {
+      "id": 15,
+      "headline": "Breakthrough in Fusion Energy Brings Clean Power One Step Closer",
+      "subheadline": "Scientists achieve net energy gain in fusion reaction, paving way for unlimited clean energy",
+      "author": "Dr. Fusion Future",
+      "publishDate": "2023-11-05T18:30:00Z",
+      "category": "Science",
+      "thumbnailUrl": "https://news-images.com/fusion-energy-breakthrough.jpg"
+    },
+    {
+      "id": 16,
+      "headline": "Global Mental Health Crisis Looms as Pandemic Effects Linger",
+      "subheadline": "WHO calls for increased funding and resources for mental health services worldwide",
+      "author": "Mind Matters",
+      "publishDate": "2023-11-04T12:45:00Z",
+      "category": "Health",
+      "thumbnailUrl": "https://news-images.com/mental-health-crisis.jpg"
+    },
+    {
+      "id": 17,
+      "headline": "Cryptocurrency Adoption Soars in Developing Nations",
+      "subheadline": "Digital currencies offer financial inclusion for unbanked populations",
+      "author": "Crypto Evangelist",
+      "publishDate": "2023-11-03T10:20:00Z",
+      "category": "Finance",
+      "thumbnailUrl": "https://news-images.com/crypto-adoption-global.jpg"
+    },
+    {
+      "id": 18,
+      "headline": "Biodiversity Crisis: One Million Species at Risk of Extinction",
+      "subheadline": "UN report highlights urgent need for conservation efforts to prevent ecological collapse",
+      "author": "Eco Warrior",
+      "publishDate": "2023-11-02T16:55:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/biodiversity-crisis.jpg"
+    },
+    {
+      "id": 19,
+      "headline": "Artificial Intelligence Revolutionizes Drug Discovery Process",
+      "subheadline": "AI-powered platforms identify potential treatments for previously 'undruggable' diseases",
+      "author": "Dr. AI Pharma",
+      "publishDate": "2023-11-01T14:15:00Z",
+      "category": "Science",
+      "thumbnailUrl": "https://news-images.com/ai-drug-discovery.jpg"
+    },
+    {
+      "id": 20,
+      "headline": "Global Water Scarcity Reaches Critical Levels",
+      "subheadline": "Experts warn of potential conflicts over water resources in coming decades",
+      "author": "H2O Guardian",
+      "publishDate": "2023-10-31T11:40:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/water-scarcity-global.jpg"
+    },
+    {
+      "id": 21,
+      "headline": "Virtual Reality Transforms Education and Job Training",
+      "subheadline": "Immersive technologies offer new possibilities for skill development and remote learning",
+      "author": "VR Educator",
+      "publishDate": "2023-10-30T09:25:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/vr-education-training.jpg"
+    },
+    {
+      "id": 22,
+      "headline": "Global Efforts to Combat Antibiotic Resistance Show Promise",
+      "subheadline": "New strategies and policies help slow the spread of drug-resistant superbugs",
+      "author": "Dr. Antibiotics",
+      "publishDate": "2023-10-29T17:50:00Z",
+      "category": "Health",
+      "thumbnailUrl": "https://news-images.com/antibiotic-resistance-fight.jpg"
+    },
+    {
+      "id": 23,
+      "headline": "Sustainable Fashion Movement Gains Momentum",
+      "subheadline": "Major brands commit to eco-friendly practices and circular economy principles",
+      "author": "Eco Fashionista",
+      "publishDate": "2023-10-28T13:35:00Z",
+      "category": "Lifestyle",
+      "thumbnailUrl": "https://news-images.com/sustainable-fashion-trend.jpg"
+    },
+    {
+      "id": 24,
+      "headline": "Quantum Internet Prototype Demonstrates Unhackable Communication",
+      "subheadline": "Researchers successfully transmit data using quantum entanglement over long distances",
+      "author": "Quantum Net",
+      "publishDate": "2023-10-27T15:05:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/quantum-internet-demo.jpg"
+    },
+    {
+      "id": 25,
+      "headline": "Global Population Growth Slows, Raising Economic Concerns",
+      "subheadline": "Demographic shifts pose challenges for labor markets and social security systems",
+      "author": "Population Trends",
+      "publishDate": "2023-10-26T10:55:00Z",
+      "category": "Society",
+      "thumbnailUrl": "https://news-images.com/population-growth-slowdown.jpg"
+    },
+    {
+      "id": 26,
+      "headline": "Breakthrough in Carbon Capture Technology Promises Climate Solution",
+      "subheadline": "New method efficiently removes CO2 from the atmosphere at industrial scale",
+      "author": "Carbon Catcher",
+      "publishDate": "2023-10-25T14:40:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/carbon-capture-breakthrough.jpg"
+    },
+    {
+      "id": 27,
+      "headline": "Global Initiative Launches to Preserve Indigenous Languages",
+      "subheadline": "UNESCO-led effort aims to revitalize and document endangered linguistic heritage",
+      "author": "Lingua Preserver",
+      "publishDate": "2023-10-24T11:20:00Z",
+      "category": "Culture",
+      "thumbnailUrl": "https://news-images.com/indigenous-language-preservation.jpg"
+    },
+    {
+      "id": 28,
+      "headline": "Robotic Exoskeletons Revolutionize Rehabilitation and Elderly Care",
+      "subheadline": "Wearable technology helps patients regain mobility and independence",
+      "author": "Robo Helper",
+      "publishDate": "2023-10-23T16:15:00Z",
+      "category": "Health",
+      "thumbnailUrl": "https://news-images.com/robotic-exoskeletons-care.jpg"
+    },
+    {
+      "id": 29,
+      "headline": "Global Food Waste Reduction Efforts Show Significant Progress",
+      "subheadline": "Innovative technologies and policies help cut food waste by 25% in major cities",
+      "author": "Waste Not",
+      "publishDate": "2023-10-22T13:50:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/food-waste-reduction.jpg"
+    },
+    {
+      "id": 30,
+      "headline": "Artificial Intelligence Ethics Board Established to Guide AI Development",
+      "subheadline": "International coalition of experts to address ethical concerns in AI research and applications",
+      "author": "AI Ethicist",
+      "publishDate": "2023-10-21T15:30:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/ai-ethics-board.jpg"
+    },
+    {
+      "id": 31,
+      "headline": "Breakthrough in Alzheimer's Research Offers New Hope for Treatment",
+      "subheadline": "Novel drug shows promising results in slowing cognitive decline in early-stage patients",
+      "author": "Dr. Neuro Science",
+      "publishDate": "2023-10-20T11:15:00Z",
+      "category": "Health",
+      "thumbnailUrl": "https://news-images.com/alzheimers-breakthrough.jpg"
+    },
+    {
+      "id": 32,
+      "headline": "Global Initiative Launches to Clean Up Ocean Plastic Pollution",
+      "subheadline": "Innovative technology deployed to remove millions of tons of plastic from the world's oceans",
+      "author": "Marina Cleaner",
+      "publishDate": "2023-10-19T14:40:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/ocean-cleanup-initiative.jpg"
+    },
+    {
+      "id": 33,
+      "headline": "Artificial Intelligence Predicts Protein Structures, Revolutionizing Drug Discovery",
+      "subheadline": "DeepMind's AlphaFold AI solves one of biology's grand challenges",
+      "author": "Bio Tech",
+      "publishDate": "2023-10-18T09:30:00Z",
+      "category": "Science",
+      "thumbnailUrl": "https://news-images.com/ai-protein-folding.jpg"
+    },
+    {
+      "id": 34,
+      "headline": "Global Economic Forum Addresses Rising Inequality Concerns",
+      "subheadline": "World leaders and economists propose new policies to bridge the wealth gap",
+      "author": "Econ Equalizer",
+      "publishDate": "2023-10-17T16:20:00Z",
+      "category": "Economy",
+      "thumbnailUrl": "https://news-images.com/economic-inequality-forum.jpg"
+    },
+    {
+      "id": 35,
+      "headline": "Renewable Energy Breakthrough: New Solar Cell Achieves Record Efficiency",
+      "subheadline": "Scientists develop photovoltaic technology with 50% energy conversion rate",
+      "author": "Solar Innovator",
+      "publishDate": "2023-10-16T13:45:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/solar-cell-breakthrough.jpg"
+    },
+    {
+      "id": 36,
+      "headline": "Global Education Gap Widens: UNESCO Report Highlights Disparities",
+      "subheadline": "Study reveals growing divide in access to quality education between developed and developing nations",
+      "author": "Ed Equity",
+      "publishDate": "2023-10-15T10:30:00Z",
+      "category": "Education",
+      "thumbnailUrl": "https://news-images.com/global-education-gap.jpg"
+    },
+    {
+      "id": 37,
+      "headline": "Breakthrough in Quantum Computing: Error Correction Achieved",
+      "subheadline": "Researchers demonstrate first practical quantum error correction, paving way for scalable quantum computers",
+      "author": "Qubit Master",
+      "publishDate": "2023-10-14T15:55:00Z",
+      "category": "Technology",
+      "thumbnailUrl": "https://news-images.com/quantum-error-correction.jpg"
+    },
+    {
+      "id": 38,
+      "headline": "Global Biodiversity Summit Sets Ambitious Conservation Targets",
+      "subheadline": "World leaders commit to protecting 30% of land and sea by 2030",
+      "author": "Eco Guardian",
+      "publishDate": "2023-10-13T12:10:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/biodiversity-summit-2023.jpg"
+    },
+    {
+      "id": 39,
+      "headline": "Artificial Intelligence Detects Early Signs of Dementia in Speech Patterns",
+      "subheadline": "New AI tool shows promise in early diagnosis of cognitive decline",
+      "author": "Dr. AI Diagnostics",
+      "publishDate": "2023-10-12T14:25:00Z",
+      "category": "Health",
+      "thumbnailUrl": "https://news-images.com/ai-dementia-detection.jpg"
+    },
+    {
+      "id": 40,
+      "headline": "Global Water Scarcity Reaches Critical Levels",
+      "subheadline": "Experts warn of potential conflicts over water resources in coming decades",
+      "author": "H2O Guardian",
+      "publishDate": "2023-10-11T11:40:00Z",
+      "category": "Environment",
+      "thumbnailUrl": "https://news-images.com/water-scarcity-global.jpg"
     }
-]
+  ]
