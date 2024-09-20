@@ -19,4 +19,7 @@ python src/client.py
 ```
 
 3. To run tests
+
+```
 python -m unittest discover tests
+```
