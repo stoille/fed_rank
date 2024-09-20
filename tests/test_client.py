@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 import tensorflow as tf
 import json
-from client import train_local_model, prepare_local_data, rank_articles
+from src.client import train_local_model, prepare_local_data, rank_articles
 
 class TestClient(unittest.TestCase):
 

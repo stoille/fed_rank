@@ -6,12 +6,17 @@ This project aims to develop a proof of concept framework that empowers people t
 
 1. Generate a self-signed certificate & key:
 
+```
+cd data
 openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
+```
 
 2. Run the server & client via:
 
-python server.py
-python client.py
+```
+python src/server.py
+python src/client.py
+```
 
 3. To run tests
 python -m unittest discover tests

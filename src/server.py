@@ -11,13 +11,18 @@ from tensorflow_federated.python.core.backends.native import execution_contexts
 from tensorflow import keras
 import tempfile
 import numpy as np
-import heapq  # For retrieving top K items
 import platform
+
+# global paths
+CERT_PATH = os.path.join('data', 'cert.pem')
+KEY_PATH = os.path.join('data', 'key.pem')
+CANDIDATE_ARTICLES_PATH = os.path.join('data', 'candidate_articles.json')
+GLOBAL_MODEL_PATH = os.path.join('data', 'global_model.keras')
 
 app = Flask(__name__)
 
 # Load candidate articles at server startup
-with open('candidate_articles.json', 'r') as f:
+with open(CANDIDATE_ARTICLES_PATH, 'r') as f:
     candidate_articles = json.load(f)
     
 # Initialize the training process state
@@ -78,10 +83,10 @@ def feed():
     model_weights.assign_weights_to(model)
 
     # Save the model to a file
-    model.save('global_model.keras')
+    model.save(GLOBAL_MODEL_PATH)
 
     # Load the saved model file into a BytesIO buffer
-    with open('global_model.keras', 'rb') as f:
+    with open(GLOBAL_MODEL_PATH, 'rb') as f:
         model_buffer = io.BytesIO(f.read())
 
     # Reset the buffer's position to the beginning
@@ -371,8 +376,7 @@ def rank_articles(model, candidate_articles):
     return ranked_results
 
 if __name__ == '__main__':
-    # Set up SSL context for HTTPS
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain('cert.pem', 'key.pem')  # Your SSL certificates
+    context.load_cert_chain(CERT_PATH, KEY_PATH)  # Your SSL certificates
 
     app.run(host='0.0.0.0', port=443, ssl_context=context)

@@ -1,7 +1,7 @@
 import unittest
 import tensorflow as tf
 import tensorflow_federated as tff
-from shared_model import model_fn
+from src.shared_model import model_fn
 
 class TestSharedModel(unittest.TestCase):
 

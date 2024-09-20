@@ -8,6 +8,10 @@ import uuid
 import collections
 import io
 import platform
+import os
+
+# Update the path for the certificate
+CERT_PATH = os.path.join('data', 'cert.pem')
 
 def prepare_local_data(candidate_articles):
     # Map article IDs to indices
@@ -98,9 +102,13 @@ def train_local_model(model: tf.keras.Model, train_data: tf.data.Dataset):
 if __name__ == '__main__':
     user_id = str(uuid.uuid4())
 
+    # Update paths for model files
+    GLOBAL_MODEL_PATH = os.path.join('data', 'global_model.keras')
+    LOCAL_MODEL_PATH = os.path.join('data', 'local_model.keras')
+
     # Initiate feed with the server
     try:
-        feed_response = requests.post('https://localhost:443/feed', json={}, verify='cert.pem')
+        feed_response = requests.post('https://localhost:443/feed', json={}, verify=CERT_PATH)
 
         # Extract the response data from headers
         response_data = json.loads(feed_response.headers.get('X-Response-Data', '{}'))
@@ -109,11 +117,11 @@ if __name__ == '__main__':
         candidate_articles = response_data.get('candidate_articles', [])
 
         # Save the received model file
-        with open('global_model.keras', 'wb') as f:
+        with open(GLOBAL_MODEL_PATH, 'wb') as f:
             f.write(feed_response.content)
 
         # Load the model without knowing its architecture
-        model = tf.keras.models.load_model('global_model.keras')
+        model = tf.keras.models.load_model(GLOBAL_MODEL_PATH)
 
     except Exception as err:
         print(f"An unexpected error occurred while fetching the feed: {err}")
@@ -135,10 +143,10 @@ if __name__ == '__main__':
     ranked_results = rank_articles(updated_model, candidate_articles)
 
     # Save the model to a file
-    updated_model.save('local_model.keras')
+    updated_model.save(LOCAL_MODEL_PATH)
 
     # Load the saved model file into a BytesIO buffer
-    with open('local_model.keras', 'rb') as f:
+    with open(LOCAL_MODEL_PATH, 'rb') as f:
         model_buffer = io.BytesIO(f.read())
 
     # Reset the buffer's position to the beginning
@@ -158,7 +166,7 @@ if __name__ == '__main__':
     response = requests.post('https://localhost:443/submit_updates', 
                              data=client_data, 
                              files=files, 
-                             verify='cert.pem')
+                             verify=CERT_PATH)
     print(response.content)
 
     # Display top 10 ranked results

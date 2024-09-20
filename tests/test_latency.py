@@ -6,8 +6,14 @@ import json
 import ssl
 import uuid
 import tensorflow as tf
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 from server import app
 from client import prepare_local_data, train_local_model
+
+CERT_PATH = os.path.join('data', 'cert.pem')
+KEY_PATH = os.path.join('data', 'key.pem')
 
 class LatencyTests(unittest.TestCase):
     """
@@ -40,7 +46,7 @@ class LatencyTests(unittest.TestCase):
         """
         # Set up SSL context for HTTPS
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain('cert.pem', 'key.pem')  # Your SSL certificates
+        context.load_cert_chain(CERT_PATH, KEY_PATH)  # Your SSL certificates
         app.run(host='0.0.0.0', port=443, ssl_context=context, use_reloader=False)
 
     def test_end_to_end_latency(self):
@@ -62,12 +68,16 @@ class LatencyTests(unittest.TestCase):
         response_data = json.loads(feed_response.headers.get('X-Response-Data', '{}'))
         candidate_articles = response_data.get('candidate_articles', [])
 
+        # Update model paths
+        global_model_path = os.path.join('data', 'global_model.keras')
+        local_model_path = os.path.join('data', 'local_model.keras')
+
         # Save the received model file
-        with open('global_model.keras', 'wb') as f:
+        with open(global_model_path, 'wb') as f:
             f.write(feed_response.content)
         
         # Load the model without knowing its architecture
-        model = tf.keras.models.load_model('global_model.keras')
+        model = tf.keras.models.load_model(global_model_path)
 
         # Prepare local training data
         prepare_start_time = time.perf_counter()
@@ -84,10 +94,10 @@ class LatencyTests(unittest.TestCase):
         print(f"Local training latency: {training_latency:.4f} seconds")
 
         # Save the model to a file
-        model.save('local_model.keras')
+        model.save(local_model_path)
 
         # Load the saved model file into a buffer
-        with open('local_model.keras', 'rb') as f:
+        with open(local_model_path, 'rb') as f:
             model_buffer = f.read()
 
         # Prepare data to send to the server

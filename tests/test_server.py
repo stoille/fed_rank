@@ -3,7 +3,7 @@ import json
 import os
 import numpy as np
 import tensorflow as tf
-from server import app, rank_articles
+from src.server import app, rank_articles
 import io
 import tempfile
 
@@ -20,6 +20,9 @@ class TestServer(unittest.TestCase):
         
         self.app = app.test_client()
         self.app.testing = True
+
+        # Update model path
+        self.temp_model_path = os.path.join('data', 'temp_model.keras')
 
     def test_feed_route(self):
         """
@@ -54,12 +57,10 @@ class TestServer(unittest.TestCase):
         mock_model = tf.keras.Model(inputs=[article_input, user_input], outputs=dot_product)
 
         # Save the mock model to a temporary file
-        with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp:
-            mock_model.save(tmp.name)
-            tmp_model_path = tmp.name
+        mock_model.save(self.temp_model_path)
 
         # Prepare the data for the request
-        with open(tmp_model_path, 'rb') as model_file:
+        with open(self.temp_model_path, 'rb') as model_file:
             sample_data = {
                 'user_id': 'test_user',
                 'permissions': json.dumps({'essential': True}),
@@ -71,7 +72,7 @@ class TestServer(unittest.TestCase):
                                      content_type='multipart/form-data')
         
         # Clean up the temporary file
-        os.unlink(tmp_model_path)
+        os.remove(self.temp_model_path)
         
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
