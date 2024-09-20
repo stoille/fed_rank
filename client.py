@@ -7,6 +7,7 @@ import json
 import uuid
 import collections
 import io
+import platform
 
 def prepare_local_data(candidate_articles):
     # Map article IDs to indices
@@ -38,7 +39,14 @@ def prepare_local_data(candidate_articles):
     return dataset
 
 def train_local_model(model: tf.keras.Model, train_data):
-    optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
+    # Check if running on M1/M2 Mac
+    is_m1_mac = platform.processor() == 'arm'
+    
+    if is_m1_mac:
+        optimizer = tf.keras.optimizers.legacy.SGD(learning_rate=0.01)
+    else:
+        optimizer = tf.keras.optimizers.SGD(learning_rate=0.01)
+    
     loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
     # Training loop

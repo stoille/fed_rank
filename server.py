@@ -12,6 +12,7 @@ from tensorflow import keras
 import tempfile
 import numpy as np
 import heapq  # For retrieving top K items
+import platform
 
 app = Flask(__name__)
 
@@ -39,12 +40,20 @@ def feed():
     global state
     global training_process
 
+    # Check if running on M1/M2 Mac
+    is_m1_mac = platform.processor() == 'arm'
+    
+    if is_m1_mac:
+        optimizer = tf.keras.optimizers.legacy.SGD
+    else:
+        optimizer = tf.keras.optimizers.SGD
+
     # Build the federated reconstruction training process
     training_process = tff.learning.algorithms.build_fed_recon(
         model_fn=lambda: model_fn(NUM_USER_FEATURES, NUM_ARTICLES, EMBEDDING_DIM)[0],
-        client_optimizer_fn=lambda: tf.keras.optimizers.SGD(learning_rate=0.1),
-        server_optimizer_fn=lambda: tf.keras.optimizers.SGD(learning_rate=1.0),
-        reconstruction_optimizer_fn=lambda: tf.keras.optimizers.SGD(learning_rate=0.1),
+        client_optimizer_fn=lambda: optimizer(learning_rate=0.1),
+        server_optimizer_fn=lambda: optimizer(learning_rate=1.0),
+        reconstruction_optimizer_fn=lambda: optimizer(learning_rate=0.1),
         loss_fn=lambda: tf.keras.losses.BinaryCrossentropy(from_logits=True),
     )
     
@@ -276,7 +285,14 @@ def submit_updates() -> tuple[dict, int]:
         model.set_weights(aggregated_weights)
 
         # Compile the model with SGD optimizer and BinaryCrossentropy loss
-        optimizer = tf.keras.optimizers.SGD(learning_rate=0.1)
+        # Check if running on M1/M2 Mac
+        is_m1_mac = platform.processor() == 'arm'
+        
+        if is_m1_mac:
+            optimizer = tf.keras.optimizers.legacy.SGD(learning_rate=0.1)
+        else:
+            optimizer = tf.keras.optimizers.SGD(learning_rate=0.1)
+        
         loss = tf.keras.losses.BinaryCrossentropy(from_logits=True)
         model.compile(optimizer, loss, metrics=['accuracy'])
         
