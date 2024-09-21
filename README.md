@@ -1,6 +1,6 @@
 # Privacy Preserving Federated Ranker
 
-This project aims to develop a proof of concept framework that empowers people to gain insight and set boundaries on how their personal data gets used. Recommender systems generaly overlook key aspects of data agency, ownership, and privacy. Despite the existence of regulations like GDPR and CCPA that seek to protect consumer data, there is an absence of standardized ranking solutions that inherently safeguard privacy. As a result, there is a pressing need to seek out methods that can address the issue of data provenance and user empowerment, enabling individuals to regain control over how their data is used. By ensuring personalized control and developing transparent systems for managing data, our goal is to develop privacy-preserving recommender systems that go beyond mere regulatory compliance and actively protect consumer privacy at a foundational level.
+Proof of concept privacy preserving collaborative filtering recommendation system. Building on [Tensorflow Federated](https://www.tensorflow.org/federated), the server and client independently train their own [Matrix Factorization](https://en.wikipedia.org/wiki/Matrix_factorization_(recommender_systems)) models, using only a subset of shared latent factors. The server aggregates client model updates and averages them into the global model that future clients will use.
 
 ## Getting Started
 
