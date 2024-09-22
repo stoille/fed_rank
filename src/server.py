@@ -17,14 +17,14 @@ from tensorflow_federated.python.core.impl.types import computation_types
 # global paths
 CERT_PATH = os.path.join('data', 'cert.pem')
 KEY_PATH = os.path.join('data', 'key.pem')
-CANDIDATE_ARTICLES_PATH = os.path.join('data', 'candidate_articles.json')
+CANDIDATE_ARTICLES_PATH = os.path.join('data', 'candidate_items.json')
 GLOBAL_MODEL_PATH = os.path.join('data', 'global_model.keras')
 
 app = Flask(__name__)
 
 # Load candidate articles at server startup
 with open(CANDIDATE_ARTICLES_PATH, 'r') as f:
-    candidate_articles = json.load(f)
+    candidate_items = json.load(f)
     
 # Initialize the training process state
 state = None
@@ -83,7 +83,7 @@ def feed():
 
     response_data = {
         'message': 'Global model and candidate articles provided. Use POST /submit_updates to provide model updates.',
-        'candidate_articles': candidate_articles,
+        'candidate_items': candidate_items,
         'permissions_requested': {
             'essential': {
                 'enabled': True,
@@ -179,26 +179,26 @@ def compute_recommender_metrics(model, validation_dataset):
         predictions = data['predictions']
 
         # Get the list of articles sorted by predicted score
-        ranked_articles = sorted(predictions.items(), key=lambda x: x[1], reverse=True)
-        top_k_articles = [item_id for item_id, _ in ranked_articles[:TOP_K]]
+        ranked_items = sorted(predictions.items(), key=lambda x: x[1], reverse=True)
+        top_k_items = [item_id for item_id, _ in ranked_items[:TOP_K]]
 
         # Relevant articles are those with label == 1
-        relevant_articles = [item_id for item_id, label in labels.items() if label == 1]
+        relevant_items = [item_id for item_id, label in labels.items() if label == 1]
 
         # Compute Precision@K
-        num_relevant_in_top_k = sum([1 for item_id in top_k_articles if labels.get(item_id, 0) == 1])
+        num_relevant_in_top_k = sum([1 for item_id in top_k_items if labels.get(item_id, 0) == 1])
         precision = num_relevant_in_top_k / TOP_K if TOP_K > 0 else 0
         precision_at_k.append(precision)
 
         # Compute Recall@K
-        num_relevant = len(relevant_articles)
+        num_relevant = len(relevant_items)
         recall = num_relevant_in_top_k / num_relevant if num_relevant > 0 else 0
         recall_at_k.append(recall)
 
         # Compute NDCG@K
         dcg = 0.0
         idcg = 0.0
-        for i, item_id in enumerate(top_k_articles):
+        for i, item_id in enumerate(top_k_items):
             rel = labels.get(item_id, 0)
             dcg += (2 ** rel - 1) / np.log2(i + 2)  # i + 2 because index starts at 0
 

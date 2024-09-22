@@ -25,5 +25,11 @@
     "type": "numerical",
     "min": 1,
     "max": 60
+  },
+  {
+    "name": "average_gaze_duration",
+    "type": "numerical",
+    "min": 1,
+    "max": 10
   }
 ]
