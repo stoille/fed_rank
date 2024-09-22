@@ -1,63 +1,86 @@
+import os
 import tensorflow as tf
 import tensorflow_federated as tff
-import collections
 
-class UserEmbedding(tf.keras.layers.Layer):
-    def __init__(self, num_latent_factors: int, **kwargs):
-        super().__init__(**kwargs)
-        self.num_latent_factors = num_latent_factors
+# Constants
+NUM_USERS = int(os.getenv('NUM_USERS', '1000'))
+NUM_ITEMS = int(os.getenv('NUM_ITEMS', '1000'))
+EMBEDDING_DIM = int(os.getenv('EMBEDDING_DIM', '32'))
 
-    def build(self, input_shape: tf.TensorShape) -> None:
-        self.embedding = self.add_weight(
-            shape=(1, self.num_latent_factors),
-            initializer='uniform',
-            dtype=tf.float32,
-            name='UserEmbeddingKernel')
-        super().build(input_shape)
+def model_fn():
+    """
+    Creates and returns a TFF learning Model.
+    
+    Returns:
+        A `tff.learning.Model` instance.
+    """
+    user_input = tf.keras.layers.Input(shape=(1,), dtype=tf.int32, name='user_input')
+    item_input = tf.keras.layers.Input(shape=(1,), dtype=tf.int32, name='item_input')
 
-    def call(self, inputs: tf.Tensor) -> tf.Tensor:
-        return tf.tile(self.embedding, [tf.shape(inputs)[0], 1])
+    user_embedding = tf.keras.layers.Embedding(
+        input_dim=NUM_USERS, output_dim=EMBEDDING_DIM, name='user_embedding')(user_input)
+    item_embedding = tf.keras.layers.Embedding(
+        input_dim=NUM_ITEMS, output_dim=EMBEDDING_DIM, name='item_embedding')(item_input)
 
-def model_fn(num_user_features=1000, num_articles=1000, embedding_dim=32):
-    # Define model inputs
-    article_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='article_input')
-    user_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='user_input')
+    dot_product = tf.keras.layers.Dot(axes=-1)([user_embedding, item_embedding])
+    output = tf.keras.layers.Flatten()(dot_product)
 
-    # Define embedding layers
-    article_embedding_layer = tf.keras.layers.Embedding(
-        input_dim=num_articles, output_dim=embedding_dim, name='article_embedding_layer'
-    )
-    user_embedding_layer = tf.keras.layers.Embedding(
-        input_dim=num_user_features, output_dim=embedding_dim, name='user_embedding_layer'
-    )
+    # Optionally, add an activation function
+    output = tf.keras.layers.Activation('sigmoid')(output)
 
-    # Apply embeddings
-    article_embedding = article_embedding_layer(article_input)
-    user_embedding = user_embedding_layer(user_input)
+    keras_model = tf.keras.Model(inputs=[user_input, item_input], outputs=output)
 
-    # Flatten embeddings
-    article_flatten_vec = tf.keras.layers.Flatten()(article_embedding)
-    user_flatten_vec = tf.keras.layers.Flatten()(user_embedding)
+    # Define input specification
+    input_spec = ({
+        'user_input': tf.TensorSpec(shape=[None, 1], dtype=tf.int32),
+        'item_input': tf.TensorSpec(shape=[None, 1], dtype=tf.int32)
+    }, tf.TensorSpec(shape=[None, 1], dtype=tf.float32))
 
-    # Compute dot product
-    pred = tf.keras.layers.Dot(axes=1, normalize=False, name='Dot')([user_flatten_vec, article_flatten_vec])
-
-    # Define the model
-    model = tf.keras.Model(inputs={'article_input': article_input, 'user_input': user_input}, outputs=pred)
-
-    # Update input_spec to match the client data
-    input_spec = collections.OrderedDict(
-        x=collections.OrderedDict(
-            article_input=tf.TensorSpec(shape=[None, 1], dtype=tf.int32),
-            user_input=tf.TensorSpec(shape=[None, 1], dtype=tf.int32)
-        ),
-        y=tf.TensorSpec(shape=[None, 1], dtype=tf.float32)
-    )
-
-    # Create the reconstruction model
-    return tff.learning.models.ReconstructionModel.from_keras_model_and_layers(
-        keras_model=model,
-        global_layers=[article_embedding_layer],
-        local_layers=[user_embedding_layer],
+    return tff.learning.models.from_keras_model(
+        keras_model=keras_model,
         input_spec=input_spec,
-    ), model
+        loss=tf.keras.losses.BinaryCrossentropy(),
+        metrics=[tf.keras.metrics.BinaryAccuracy()]
+    ), keras_model
+
+def tff_model_fn():
+    keras_model, input_spec = model_fn()
+    return tff.learning.models.from_keras_model(
+        keras_model=keras_model,
+        input_spec=input_spec,
+        loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+        metrics=[tf.keras.metrics.BinaryAccuracy()]
+    )
+
+def get_keras_model():
+    """
+    Creates and returns the Keras model.
+    """
+    user_input = tf.keras.layers.Input(shape=(1,), dtype=tf.int32, name='user_input')
+    item_input = tf.keras.layers.Input(shape=(1,), dtype=tf.int32, name='item_input')
+
+    user_embedding = tf.keras.layers.Embedding(
+        input_dim=NUM_USERS, output_dim=EMBEDDING_DIM, name='user_embedding')(user_input)
+    item_embedding = tf.keras.layers.Embedding(
+        input_dim=NUM_ITEMS, output_dim=EMBEDDING_DIM, name='item_embedding')(item_input)
+
+    dot_product = tf.keras.layers.Dot(axes=-1)([user_embedding, item_embedding])
+    output = tf.keras.layers.Flatten()(dot_product)
+
+    # Add activation if necessary
+    output = tf.keras.layers.Activation('sigmoid')(output)
+
+    keras_model = tf.keras.Model(inputs=[user_input, item_input], outputs=output)
+    keras_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+    return keras_model
+
+# Test the functions
+if __name__ == '__main__':
+    # Test model_fn
+    keras_model, input_spec = model_fn()
+    keras_model.summary()
+
+    # Test tff_model_fn
+    tff_model = tff_model_fn()
+    print("TFF Model created successfully.")

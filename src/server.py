@@ -3,7 +3,7 @@ import tensorflow as tf
 import tensorflow_federated as tff
 from flask import Flask, request, jsonify, send_file
 import ssl
-from shared_model import model_fn
+from shared_model import model_fn, get_keras_model
 import json
 import io
 import os
@@ -12,6 +12,7 @@ from tensorflow import keras
 import tempfile
 import numpy as np
 import platform
+from tensorflow_federated.python.core.impl.types import computation_types
 
 # global paths
 CERT_PATH = os.path.join('data', 'cert.pem')
@@ -28,10 +29,11 @@ with open(CANDIDATE_ARTICLES_PATH, 'r') as f:
 # Initialize the training process state
 state = None
 training_process = None
+client_datasets = []
 
 # Constants
-NUM_USER_FEATURES = int(os.getenv('NUM_USER_FEATURES', '1000'))
-NUM_ARTICLES = int(os.getenv('NUM_ARTICLES', '1000'))
+NUM_USERS = int(os.getenv('NUM_USERS', '1000'))
+NUM_ITEMS = int(os.getenv('NUM_ITEMS', '1000'))
 EMBEDDING_DIM = int(os.getenv('EMBEDDING_DIM', '32'))
 TOP_K = 10  # Define K for Precision@K and Recall@K
 
@@ -49,41 +51,28 @@ def feed():
     is_m1_mac = platform.processor() == 'arm'
     
     if is_m1_mac:
-        optimizer = tf.keras.optimizers.legacy.SGD
+        optimizer = tf.keras.optimizers.legacy.Adam
     else:
-        optimizer = tf.keras.optimizers.SGD
+        optimizer = tf.keras.optimizers.Adam
 
-    # Build the federated reconstruction training process
-    training_process = tff.learning.algorithms.build_fed_recon(
-        model_fn=lambda: model_fn(NUM_USER_FEATURES, NUM_ARTICLES, EMBEDDING_DIM)[0],
+    # Build the federated learning process
+    training_process = tff.learning.algorithms.build_weighted_fed_avg(
+        model_fn=lambda: model_fn()[0],  # Use the updated model_fn
         client_optimizer_fn=lambda: optimizer(learning_rate=0.1),
         server_optimizer_fn=lambda: optimizer(learning_rate=1.0),
-        reconstruction_optimizer_fn=lambda: optimizer(learning_rate=0.1),
-        loss_fn=lambda: tf.keras.losses.BinaryCrossentropy(from_logits=True),
     )
     
-    # Set the local Python execution context
+    # Set the local Python execution context. This needs to be set to run TFF locally
     execution_contexts.set_sync_local_cpp_execution_context()
 
     # Initialize the training process state
     state = training_process.initialize()
-    print("state initialized")
 
-    # Extract global model weights from the state
-    global_model_weights = state.global_model_weights
-
-    # Reconstruct the Keras model using model_fn
-    model = model_fn(NUM_USER_FEATURES, NUM_ARTICLES, EMBEDDING_DIM)[1]
-
-    # Assign the global model weights to the Keras model
-    model_weights = tff.learning.models.ModelWeights(
-        trainable=global_model_weights.trainable,
-        non_trainable=global_model_weights.non_trainable
-    )
-    model_weights.assign_weights_to(model)
+    # Reconstruct the Keras model to save and send to clients
+    keras_model = get_keras_model()
 
     # Save the model to a file
-    model.save(GLOBAL_MODEL_PATH)
+    keras_model.save(GLOBAL_MODEL_PATH)
 
     # Load the saved model file into a BytesIO buffer
     with open(GLOBAL_MODEL_PATH, 'rb') as f:
@@ -144,12 +133,12 @@ def load_validation_data():
     """
     # Example validation data with user IDs, article IDs, and labels indicating interactions
     num_samples = 1000
-    user_ids = np.random.randint(0, NUM_USER_FEATURES, size=(num_samples, 1))
-    article_ids = np.random.randint(0, NUM_ARTICLES, size=(num_samples, 1))
+    user_ids = np.random.randint(0, NUM_USERS, size=(num_samples, 1))
+    item_ids = np.random.randint(0, NUM_ITEMS, size=(num_samples, 1))
     labels = np.random.randint(0, 2, size=(num_samples, 1))  # 1 if the user interacted with the article, else 0
 
     dataset = tf.data.Dataset.from_tensor_slices((
-        {'user_input': user_ids, 'article_input': article_ids},
+        {'user_input': user_ids, 'item_input': item_ids},
         labels
     ))
     dataset = dataset.batch(32).prefetch(tf.data.AUTOTUNE)
@@ -162,7 +151,7 @@ def compute_recommender_metrics(model, validation_dataset):
     all_labels = []
     all_predictions = []
     all_user_ids = []
-    all_article_ids = []
+    all_item_ids = []
 
     for batch in validation_dataset:
         inputs, labels = batch
@@ -170,15 +159,15 @@ def compute_recommender_metrics(model, validation_dataset):
         all_labels.extend(labels.numpy().flatten())
         all_predictions.extend(predictions)
         all_user_ids.extend(inputs['user_input'].numpy().flatten())
-        all_article_ids.extend(inputs['article_input'].numpy().flatten())
+        all_item_ids.extend(inputs['item_input'].numpy().flatten())
 
     # Organize data by user
     user_data = {}
-    for user_id, article_id, label, prediction in zip(all_user_ids, all_article_ids, all_labels, all_predictions):
+    for user_id, item_id, label, prediction in zip(all_user_ids, all_item_ids, all_labels, all_predictions):
         if user_id not in user_data:
             user_data[user_id] = {'labels': {}, 'predictions': {}}
-        user_data[user_id]['labels'][article_id] = label
-        user_data[user_id]['predictions'][article_id] = prediction
+        user_data[user_id]['labels'][item_id] = label
+        user_data[user_id]['predictions'][item_id] = prediction
 
     # Compute metrics
     precision_at_k = []
@@ -191,13 +180,13 @@ def compute_recommender_metrics(model, validation_dataset):
 
         # Get the list of articles sorted by predicted score
         ranked_articles = sorted(predictions.items(), key=lambda x: x[1], reverse=True)
-        top_k_articles = [article_id for article_id, _ in ranked_articles[:TOP_K]]
+        top_k_articles = [item_id for item_id, _ in ranked_articles[:TOP_K]]
 
         # Relevant articles are those with label == 1
-        relevant_articles = [article_id for article_id, label in labels.items() if label == 1]
+        relevant_articles = [item_id for item_id, label in labels.items() if label == 1]
 
         # Compute Precision@K
-        num_relevant_in_top_k = sum([1 for article_id in top_k_articles if labels.get(article_id, 0) == 1])
+        num_relevant_in_top_k = sum([1 for item_id in top_k_articles if labels.get(item_id, 0) == 1])
         precision = num_relevant_in_top_k / TOP_K if TOP_K > 0 else 0
         precision_at_k.append(precision)
 
@@ -209,8 +198,8 @@ def compute_recommender_metrics(model, validation_dataset):
         # Compute NDCG@K
         dcg = 0.0
         idcg = 0.0
-        for i, article_id in enumerate(top_k_articles):
-            rel = labels.get(article_id, 0)
+        for i, item_id in enumerate(top_k_articles):
+            rel = labels.get(item_id, 0)
             dcg += (2 ** rel - 1) / np.log2(i + 2)  # i + 2 because index starts at 0
 
         # Ideal DCG
@@ -230,150 +219,106 @@ def compute_recommender_metrics(model, validation_dataset):
     return metrics
 
 @app.route('/submit_updates', methods=['POST'])
-def submit_updates() -> tuple[dict, int]:
-    global state
-    global training_process
-    global client_updates_list
-    print("submitting updates")
-    
-    # Receive model updates and permissions from the client
-    user_id = request.form['user_id']
-    permissions = json.loads(request.form['permissions'])
-    
-    # Store user permissions
-    user_permissions[user_id] = permissions
-
-    # Save the uploaded file to a temporary directory
-    model_file = request.files['model']
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_model_path = os.path.join(temp_dir, 'local_model.keras')
-        model_file.save(temp_model_path)
+def submit_updates():
+    try:
+        global state
+        global training_process
+        global client_datasets
+        print("submitting updates")
         
-        # Load the model using keras.models.load_model()
-        updated_model = keras.models.load_model(temp_model_path)
-
-    # Extract weights from the updated model
-    client_weights = updated_model.get_weights()
-
-    # Append the client weights to the list
-    client_updates_list.append(client_weights)
-
-    # Initialize default metrics
-    global_model_loss = None
-    global_model_accuracy = None
-    recommender_metrics = {}
-    ranked_results = []
-
-    # Check if enough client updates have been collected to perform aggregation
-    if len(client_updates_list) >= NUM_CLIENTS_PER_ROUND:
-        print("Aggregating client updates...")
-        # Initialize a list to hold the aggregated weights
-        aggregated_weights = []
-
-        # Number of layers in the model
-        num_layers = len(client_updates_list[0])
-
-        # Perform federated averaging
-        for layer_idx in range(num_layers):
-            # Collect the weights for the current layer from all clients
-            layer_weights = [client_weights[layer_idx] for client_weights in client_updates_list]
-            # Convert the list to a numpy array for averaging
-            layer_weights = np.array(layer_weights)
-            # Compute the mean of the weights
-            mean_weights = np.mean(layer_weights, axis=0)
-            # Append the averaged weights to the aggregated_weights list
-            aggregated_weights.append(mean_weights)
+        # Receive model updates and permissions from the client
+        user_id = request.form['user_id']
+        permissions = json.loads(request.form['permissions'])
         
-        # Update the global model weights
-        # Reconstruct the Keras model using model_fn
-        model = model_fn(NUM_USER_FEATURES, NUM_ARTICLES, EMBEDDING_DIM)[1]
-        # Assign the aggregated weights to the model
-        model.set_weights(aggregated_weights)
+        # Store user permissions
+        user_permissions[user_id] = permissions
 
-        # Compile the model with SGD optimizer and BinaryCrossentropy loss
-        # Check if running on M1/M2 Mac
-        is_m1_mac = platform.processor() == 'arm'
-        
-        if is_m1_mac:
-            optimizer = tf.keras.optimizers.legacy.SGD(learning_rate=0.1)
-        else:
-            optimizer = tf.keras.optimizers.SGD(learning_rate=0.1)
-        
-        loss = tf.keras.losses.BinaryCrossentropy(from_logits=True)
-        model.compile(optimizer, loss, metrics=['accuracy'])
-        
-        # Evaluate the updated global model on a validation dataset
-        validation_dataset = load_validation_data()
-        evaluation_results = model.evaluate(validation_dataset, verbose=0)
-        global_model_loss, global_model_accuracy = evaluation_results
+        # Save the uploaded file to a temporary directory
+        model_file = request.files['model']
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_model_path = os.path.join(temp_dir, 'local_model.keras')
+            model_file.save(temp_model_path)
+            
+            # Load the model using keras.models.load_model()
+            server_model = keras.models.load_model(temp_model_path, compile=False)
 
-        # Compute recommender system metrics
-        recommender_metrics = compute_recommender_metrics(model, validation_dataset)
+        # Convert the updated model to a TFF dataset
+        client_dataset = tf_model_to_dataset(server_model)
+        client_datasets.append(client_dataset)
 
-        # Rank articles
-        ranked_results = rank_articles(model, candidate_articles)
+        # Initialize default metrics
+        global_model_loss = None
+        global_model_accuracy = None
+        recommender_metrics = {}
 
-        # Extract global model weights from the updated model
-        global_model_weights = tff.learning.models.ModelWeights.from_model(model)
-        
-        # Update the server state with new weights
-        state = tff.learning.templates.LearningAlgorithmState(
-            global_model_weights=global_model_weights,
-            distributor=state.distributor,
-            client_work=state.client_work,
-            aggregator=state.aggregator,
-            finalizer=state.finalizer
-        ) 
-        
-        # Clear the client updates list for the next round
-        client_updates_list = []
-        print("Global model updated.")
+        # Check if enough client updates have been collected to perform aggregation
+        if len(client_datasets) >= NUM_CLIENTS_PER_ROUND:
+            print("Aggregating client updates...")
+            
+            # Perform federated learning round
+            state, metrics = training_process.next(state, client_datasets)
 
-    # Extract relevant metrics to send back to the client
-    client_metrics = {
-        'status': 'Model updates received and processed.',
-        'global_model_loss': global_model_loss,
-        'global_model_accuracy': global_model_accuracy,
-        'global_model_precision_at_k': recommender_metrics.get('precision_at_k'),
-        'global_model_recall_at_k': recommender_metrics.get('recall_at_k'),
-        'global_model_ndcg_at_k': recommender_metrics.get('ndcg_at_k'),
-        'ranked_results': ranked_results[:10]  # Send top 10 ranked articles
-    }
+            # Extract metrics
+            global_model_loss = metrics['loss']
+            global_model_accuracy = metrics['accuracy']
 
-    print("sending metrics back to client")
-    # Acknowledge receipt of updates and send metrics back to the client
-    return jsonify({
-        'status': 'success',
-        'message': 'Model updates received and processed.',
-        'metrics': client_metrics
-    }), 200
+            # Reconstruct the Keras model using model_fn
+            _, server_model = model_fn()
+            
+            # Assign the updated weights to the model
+            tff.learning.models.ModelWeights.assign_weights_to(state.global_model_weights, server_model)
 
-def rank_articles(model, candidate_articles):
-    article_id_to_index = {
-        article['id']: idx for idx, article in enumerate(candidate_articles)
-    }
-    test_article_indices = [
-        article_id_to_index[article['id']] for article in candidate_articles
-    ]
-    test_article_lengths = [len(article['headline']) for article in candidate_articles]
-    
-    test_article_indices_tensor = tf.constant(test_article_indices, dtype=tf.int32)
-    test_article_lengths_tensor = tf.constant(test_article_lengths, dtype=tf.float32)
-    
-    predictions = model.predict(
-        {'article_input': test_article_indices_tensor, 'user_input': np.zeros((len(candidate_articles), 1))}
-    )
+            # Compute recommender system metrics
+            validation_dataset = load_validation_data()
+            recommender_metrics = compute_recommender_metrics(server_model, validation_dataset)
+            
+            # Clear the client datasets list for the next round
+            client_datasets = []
+            
+            # Save the model to a file
+            server_model.save(GLOBAL_MODEL_PATH)
+            print("Global model updated.")
 
-    ranked_results = sorted(
-        zip(
-            [article['id'] for article in candidate_articles],
-            predictions.flatten().astype(float)
-        ),
-        key=lambda x: x[1],
-        reverse=True
-    )
+        # Extract relevant metrics to send back to the client
+        client_metrics = {
+            'status': 'Model updates received and processed.',
+            'global_model_loss': global_model_loss,
+            'global_model_accuracy': global_model_accuracy,
+            'global_model_precision_at_k': recommender_metrics.get('precision_at_k'),
+            'global_model_recall_at_k': recommender_metrics.get('recall_at_k'),
+            'global_model_ndcg_at_k': recommender_metrics.get('ndcg_at_k'),
+        }
 
-    return ranked_results
+        # Serialize the response data, ensuring no newlines
+        response_json = json.dumps({
+            'status': 'success',
+            'message': 'Model updates received and processed.',
+            'metrics': client_metrics
+        }).replace('\n', '')
+
+        # Load the saved model file into a BytesIO buffer
+        with open(GLOBAL_MODEL_PATH, 'rb') as f:
+            model_buffer = io.BytesIO(f.read())
+
+        # Reset the buffer's position to the beginning
+        model_buffer.seek(0)
+
+        return send_file(
+            model_buffer,
+            as_attachment=True,
+            download_name='global_model.keras',
+            mimetype='application/octet-stream'
+        ), 200, {'X-Response-Data': response_json}
+
+    except Exception as e:
+        app.logger.error(f"Error in submit_updates: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+def tf_model_to_dataset(model):
+    """Convert a TensorFlow model to a TFF dataset."""
+    weights = model.get_weights()
+    dataset = tf.data.Dataset.from_tensor_slices(weights)
+    return dataset.batch(1)
 
 if __name__ == '__main__':
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
