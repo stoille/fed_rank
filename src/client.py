@@ -18,7 +18,7 @@ CERT_PATH = os.path.join('data', 'cert.pem')
 # Update paths for model files
 GLOBAL_MODEL_PATH = os.path.join('data', 'global_model.keras')
 LOCAL_MODEL_PATH = os.path.join('data', 'local_model.keras')
-
+CANDIDATE_ITEMS_PATH = os.path.join('data', 'candidate_items.json')
 # Constants
 NUM_EPOCHS = int(os.environ.get('NUM_EPOCHS', 10))
 PATIENCE = int(os.environ.get('PATIENCE', 3))
@@ -35,6 +35,9 @@ EXPLICIT_INTERACTIONS = {
     'share': {'value': 2, 'cumulative': True},
     'save': {'value': 1.5, 'cumulative': True},
 }
+# Global variables
+user_data = None
+user_feature_vector = None
 
 def prepare_local_data(candidate_items):
     # This is a simplified version. You may need to adjust it based on your actual data structure
@@ -54,27 +57,56 @@ def prepare_local_data(candidate_items):
     
     return train_data, val_data
 
-def load_user_features():
-    with open('data/user_features.json', 'r') as f:
+def load_user_features_schema():
+    with open('data/user_features_schema.json', 'r') as f:
         return json.load(f)
 
-def find_user_features(user_features, user_id):
-    return next((user for user in user_features if user['id'] == user_id), {})
-
-def generate_user_feature_vector(user_features_params):
-    feature_vector = []
-    for feature in user_features_params:
+def generate_default_user(user_features_schema: list):
+    default_user = {'id': str(uuid.uuid4())}
+    
+    for feature in user_features_schema:
         if feature['type'] == 'categorical':
-            value = random.choice(feature['categories'])
+            default_user[feature['name']] = random.choice(feature['categories'])
         elif feature['type'] == 'numerical':
-            value = random.uniform(feature['min'], feature['max'])
-        else:
-            value = 0  # Default value for unknown types
-        feature_vector.append(value)
+            default_user[feature['name']] = random.uniform(feature['min'], feature['max'])
+        elif feature['type'] == 'list':
+            num_items = random.randint(feature['min_items'], feature['max_items'])
+            default_user[feature['name']] = random.sample(feature['items'], num_items)
+        # Add more types if needed
+    
+    return default_user
+
+def generate_user_feature_vector(user_data, user_features_schema):
+    feature_vector = []
+    for feature in user_features_schema:
+        if feature['type'] == 'categorical':
+            feature_vector.extend(one_hot_encode(user_data[feature['name']], feature['categories']))
+        elif feature['type'] == 'numerical':
+            feature_vector.append(user_data[feature['name']])
+        elif feature['type'] == 'list':
+            feature_vector.extend([1 if item in user_data['name'] else 0 for item in feature['items']])
     return feature_vector
 
+def one_hot_encode(value, categories):
+    return [1 if value == category else 0 for category in categories]
+
+def load_or_generate_user_data():
+    global user_data, user_feature_vector
+    user_data_path = os.path.join('data', 'user_data.json')
+    user_features_schema = load_user_features_schema()
+    
+    if os.path.exists(user_data_path):
+        with open(user_data_path, 'r') as f:
+            user_data = json.load(f)
+    else:
+        user_data = generate_default_user(user_features_schema)
+        with open(user_data_path, 'w') as f:
+            json.dump(user_data, f)
+    
+    user_feature_vector = generate_user_feature_vector(user_data, user_features_schema)
+
 def load_candidate_items():
-    with open('data/candidate_items.json', 'r') as f:
+    with open(CANDIDATE_ITEMS_PATH, 'r') as f:
         return json.load(f)
 
 class UserItemInteraction(tf.keras.layers.Layer):
@@ -91,17 +123,7 @@ class UserItemInteraction(tf.keras.layers.Layer):
         return tf.concat([user_tiled, item_input], axis=-1)
 
 def rank_items(model, user_id):
-    user_features_list = load_user_features()
-    user_features_params = user_features_list  # Assuming the loaded list contains feature parameters
-    user_data = None #TODO: get user data from server
-    
-    if not user_data:
-        # If user not found, generate random features
-        user_feature_vector = generate_user_feature_vector(user_features_params)
-    else:
-        # If user found, use their existing features
-        user_feature_vector = [user_data.get(feature['name'], 0) for feature in user_features_params if feature['name'] != 'id']
-    
+    global user_feature_vector
     candidate_items = load_candidate_items()
     
     # Prepare item input
@@ -118,13 +140,21 @@ def rank_items(model, user_id):
         
         item_features.append(interaction_features)
     
+    item_input = tf.constant(item_features, dtype=tf.float32)
+    
+    # Use the global user_feature_vector
     user_input = tf.constant([user_feature_vector], dtype=tf.float32)
-    item_input = tf.constant([item_features], dtype=tf.float32)  # Note the extra brackets
-
-    predictions = model({'user_input': user_input, 'item_input': item_input})
+    
+    # Repeat user input to match the batch size of item_input
+    user_input = tf.repeat(user_input, repeats=[len(candidate_items)], axis=0)
+    
+    # Get predictions
+    predictions = model({'item_input': item_input, 'user_input': user_input})
+    
+    flat_predictions = predictions.numpy().flatten()
     
     # Create a list of tuples (item_id, score)
-    ranked_results = [(item['id'], float(score)) for item, score in zip(candidate_items, predictions.numpy().flatten())]
+    ranked_results = [(item['id'], float(score)) for item, score in zip(candidate_items, flat_predictions)]
     
     # Sort the results by score in descending order
     ranked_results.sort(key=lambda x: x[1], reverse=True)
@@ -237,7 +267,8 @@ def update_global_model(client_model, user_id):
         print(f"An unexpected error occurred while updating the global model: {err}")
 
 def interactive_client():
-    user_id = str(uuid.uuid4())
+    global user_data
+    user_id = user_data['id']
     client_model = None
     candidate_items = None
     
@@ -317,4 +348,5 @@ def interactive_client():
     print("Thank you for using the interactive client. Goodbye!")
 
 if __name__ == '__main__':
+    load_or_generate_user_data()
     interactive_client()
