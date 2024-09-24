@@ -1,16 +1,15 @@
 import sys
-import tensorflow as tf
-import tensorflow_federated as tff
-import requests
-import numpy as np
-import json
-import uuid
-import collections
 import io
-import platform
 import os
 import time
+import json
 import random
+import requests
+import platform
+import numpy as np
+import collections
+import tensorflow as tf
+import tensorflow_federated as tff
 from collections import defaultdict
 
 # Update the path for the certificate
@@ -39,30 +38,12 @@ EXPLICIT_INTERACTIONS = {
 user_data = None
 user_feature_vector = None
 
-def prepare_local_data(candidate_items):
-    # This is a simplified version. You may need to adjust it based on your actual data structure
-    item_ids = [hash(item['id']) % 10000 for item in candidate_items]
-    labels = [1 if i % 2 == 0 else 0 for i in range(len(candidate_items))]  # Dummy labels
-    
-    # Split data into train and validation sets
-    split = int(0.8 * len(item_ids))
-    train_data = {
-        'input': {'item_input': item_ids[:split], 'user_input': [1] * split},
-        'output': labels[:split]
-    }
-    val_data = {
-        'input': {'item_input': item_ids[split:], 'user_input': [1] * (len(item_ids) - split)},
-        'output': labels[split:]
-    }
-    
-    return train_data, val_data
-
 def load_user_features_schema():
     with open('data/user_features_schema.json', 'r') as f:
         return json.load(f)
 
 def generate_default_user(user_features_schema: list):
-    default_user = {'id': str(uuid.uuid4())}
+    default_user = {'id': random.randint(1, 1000)}
     
     for feature in user_features_schema:
         if feature['type'] == 'categorical':
@@ -122,49 +103,51 @@ class UserItemInteraction(tf.keras.layers.Layer):
         # Concatenate user and item inputs
         return tf.concat([user_tiled, item_input], axis=-1)
 
-def rank_items(model, user_id):
-    global user_feature_vector
-    candidate_items = load_candidate_items()
-    
-    # Prepare item input
-    item_features = []
-    for item in candidate_items:
-        interaction_features = []
-        
-        # Add explicit interaction features
-        for interaction_type in EXPLICIT_INTERACTIONS:
-            interaction_features.append(explicit_interactions[user_id].get(item['id'], {}).get(interaction_type, 0.0))
-        
-        # Add implicit interaction feature
-        interaction_features.append(implicit_interactions[user_id].get(item['id'], 0.0))
-        
-        item_features.append(interaction_features)
-    
-    item_input = tf.constant(item_features, dtype=tf.float32)
-    
-    # Use the global user_feature_vector
-    user_input = tf.constant([user_feature_vector], dtype=tf.float32)
-    
-    # Repeat user input to match the batch size of item_input
-    user_input = tf.repeat(user_input, repeats=[len(candidate_items)], axis=0)
-    
+def rank_items(model, user_id, candidate_items):
+    # Prepare item_input as integer IDs
+    item_ids = [item['ItemId'] for item in candidate_items]
+    item_input = tf.constant(item_ids, dtype=tf.int32)
+    item_input = tf.reshape(item_input, (len(item_ids), 1))
+
+    # Prepare user_input by repeating the user_id to match the batch size
+    user_ids = [int(user_id)] * len(item_ids)
+    user_input = tf.constant(user_ids, dtype=tf.int32)
+    user_input = tf.reshape(user_input, (len(user_ids), 1))
+
     # Get predictions
     predictions = model({'item_input': item_input, 'user_input': user_input})
-    
+
     flat_predictions = predictions.numpy().flatten()
-    
+
     # Create a list of tuples (item_id, score)
-    ranked_results = [(item['id'], float(score)) for item, score in zip(candidate_items, flat_predictions)]
-    
+    ranked_results = [(item_id, float(score)) for item_id, score in zip(item_ids, flat_predictions)]
+
     # Sort the results by score in descending order
     ranked_results.sort(key=lambda x: x[1], reverse=True)
     
     return ranked_results
+def prepare_local_data(candidate_items):
+    # This is a simplified version. We may need to adjust it based on actual data structure
+    item_ids = [hash(item['ItemId']) % 10000 for item in candidate_items]
+    labels = [1 if i % 2 == 0 else 0 for i in range(len(candidate_items))]  # Dummy labels
+    
+    # Split data into train and validation sets
+    split = int(0.8 * len(item_ids))
+    train_data = {
+        'input': {'item_input': item_ids[:split], 'user_input': [1] * split},
+        'output': labels[:split]
+    }
+    val_data = {
+        'input': {'item_input': item_ids[split:], 'user_input': [1] * (len(item_ids) - split)},
+        'output': labels[split:]
+    }
+    
+    return train_data, val_data
 
 def train_local_model(model, train_data, val_data):
     # Compile the model if it's not already compiled
     if not model.compiled_loss:
-        model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+        model.compile(optimizer='sgd', loss='binary_crossentropy', metrics=['accuracy'])
     
     # Prepare the input data
     train_item_input = np.array(train_data['input']['item_input'])
@@ -199,7 +182,7 @@ def get_recommendations():
             f.write(feed_response.content)
 
         client_model = tf.keras.models.load_model(GLOBAL_MODEL_PATH, compile=False)
-        client_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+        client_model.compile(optimizer='sgd', loss='binary_crossentropy', metrics=['accuracy'])
 
         print(f"Received {len(candidate_items)} candidate items and updated global model.")
         return client_model, candidate_items
@@ -292,7 +275,7 @@ def interactive_client():
         if choice == '1':
             client_model, candidate_items = get_recommendations()
             if client_model:
-                ranked_results = rank_items(client_model, user_id)
+                ranked_results = rank_items(client_model, user_id, candidate_items)
                 print("\nTop 10 Ranked Results:")
                 for i, (item_id, score) in enumerate(ranked_results[:10], 1):
                     print(f"{i}. Item {item_id}: Score {score:.4f}")
