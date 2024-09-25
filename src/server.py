@@ -16,6 +16,7 @@ from typing import Optional, List, Tuple
 from flask import Flask, request, jsonify, send_file
 from tensorflow_federated.python.core.impl.types import computation_types
 from tensorflow_federated.python.core.backends.native import execution_contexts
+import pprint
 
 # global paths
 CERT_PATH = os.path.join('data', 'cert.pem')
@@ -23,14 +24,14 @@ KEY_PATH = os.path.join('data', 'key.pem')
 ARTICLES_PATH = os.path.join('data', 'articles.csv')
 GLOBAL_MODEL_PATH = os.path.join('data', 'global_model.keras')
 # Constants
-NUM_EPOCHS = int(os.environ.get('NUM_EPOCHS', 10))
+NUM_EPOCHS = int(os.environ.get('NUM_EPOCHS', 100))
 PATIENCE = int(os.environ.get('PATIENCE', 3))
-
+MOMENTUM = float(os.environ.get('MOMENTUM', 0.96))
 app = Flask(__name__)
 
 # Constants
-NUM_USERS = int(os.getenv('NUM_USERS', '1000'))
-NUM_ITEMS = int(os.getenv('NUM_ITEMS', '1000'))
+NUM_USERS = int(os.getenv('NUM_USERS', '100'))
+NUM_ITEMS = int(os.getenv('NUM_ITEMS', '100'))
 EMBEDDING_DIM = int(os.getenv('EMBEDDING_DIM', '32'))
 MAX_EXAMPLES_PER_USER=300,
 MAX_CLIENTS=2000
@@ -53,26 +54,15 @@ def feed():
     articles_df, tf_train_datasets, tf_val_datasets = load_articles_and_ratings_data()  
     
     # Train the model
-    # TODO: use eval metrics
-    eval_state, eval_metrics = train_model(tf_train_datasets, tf_val_datasets)
-    
-    def get_keras_model():
-        # This function should return a Keras model with the same architecture as your TFF model
-        item_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='item_input')
-        user_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='user_input')
-        user_embedding = tf.keras.layers.Embedding(NUM_USERS, EMBEDDING_DIM)(user_input)
-        user_embedding = tf.keras.layers.Flatten()(user_embedding)
-        item_embedding = tf.keras.layers.Embedding(NUM_ITEMS, EMBEDDING_DIM)(item_input)
-        item_embedding = tf.keras.layers.Flatten()(item_embedding)
-        concatenated = tf.keras.layers.Concatenate()([user_embedding, item_embedding])
-        dense = tf.keras.layers.Dense(64, activation='relu')(concatenated)
-        output = tf.keras.layers.Dense(1, activation='sigmoid')(dense)
-        model = tf.keras.Model(inputs=[item_input, user_input], outputs=output)
-        return model
-
+    training_state, eval_state, train_metrics = train_model(tf_train_datasets, tf_val_datasets)
+     
     # Get keras model from TFF state
     keras_model = get_keras_model()
-    tff.learning.models.ModelWeights.assign_weights_to(eval_state.global_model_weights, keras_model)
+    
+    # Set the weights of the keras model
+    training_model_weights = training_process.get_model_weights(training_state)
+    # Correctly assign weights to the Keras model
+    tff.learning.models.ModelWeights.assign_weights_to(training_model_weights, keras_model)
 
     # Save the model to a file
     keras_model.save(GLOBAL_MODEL_PATH)
@@ -83,6 +73,20 @@ def feed():
 
     # Reset the buffer's position to the beginning
     model_buffer.seek(0)
+    
+    def convert_to_serializable(obj):
+        if isinstance(obj, (np.integer, np.floating)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: convert_to_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_to_serializable(v) for v in obj]
+        elif isinstance(obj, tuple):
+            return tuple(convert_to_serializable(v) for v in obj)
+        else:
+            return obj
 
     response_data = {
         'message': 'Global model and candidate articles provided. Use POST /submit_updates to provide model updates.',
@@ -101,6 +105,7 @@ def feed():
                 'description': 'Allows sharing of data with trusted partners for research purposes. You get enhanced personalization.'
             }
         },
+        'metrics': {k: convert_to_serializable(v) for k, v in train_metrics.items()},
         'message': 'next POST /submit_updates to provide model updates and permission settings.'
     }
 
@@ -112,9 +117,113 @@ def feed():
         mimetype='application/octet-stream'
     ), 200, {'X-Response-Data': json.dumps(response_data)}
 
+client_datasets = []
+
+@app.route('/submit_updates', methods=['POST'])
+def submit_updates():
+    global training_state
+    global client_model_weights_list
+
+    execution_contexts.set_sync_local_cpp_execution_context()
+    try:
+        print("submitting updates")
+        
+        # Receive model updates and permissions from the client
+        user_id = request.form['user_id']
+        permissions = json.loads(request.form['permissions'])
+        
+        # Store user permissions
+        user_permissions[user_id] = permissions
+
+        # Save the uploaded file to a temporary directory
+        model_file = request.files['model']
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_model_path = os.path.join(temp_dir, 'local_model.keras')
+            model_file.save(temp_model_path)
+            
+            # Load the model with custom_objects if needed
+            local_model = keras.models.load_model(
+                temp_model_path,
+                compile=False,
+                custom_objects={'UserEmbedding': UserEmbedding}
+            )
+            
+            # Extract the model weights
+            client_weights = local_model.get_weights()
+            # Append the client weights to the list
+            client_model_weights_list.append(client_weights)
+
+        # Check if enough client updates have been collected to perform aggregation
+        if len(client_model_weights_list) >= NUM_CLIENTS_PER_ROUND:
+            print("Aggregating client updates...")
+
+            # Perform Federated Averaging
+            # Average the weights across clients
+            num_clients = len(client_model_weights_list)
+
+            aggregated_weights = []
+            for weights in zip(*client_model_weights_list):
+                aggregated_weights.append(
+                    np.mean(weights, axis=0)
+                )
+
+            # Update the global model with the aggregated weights
+            global_model = get_keras_model()
+            global_model.set_weights(aggregated_weights)
+
+            # Update the training_state with the new global model weights
+            new_global_model_weights = tff.learning.models.ModelWeights.from_model(global_model)
+            training_state = tff.learning.templates.ServerState(
+                model=new_global_model_weights,
+                optimizer_state=training_state.optimizer_state,
+                delta_aggregate_state=training_state.delta_aggregate_state,
+                model_broadcast_state=training_state.model_broadcast_state
+            )
+
+            # Save the updated global model
+            global_model.save(GLOBAL_MODEL_PATH)
+            print("Global model updated.")
+
+            # Clear the client model weights list for the next round
+            client_model_weights_list = []
+
+        # Send response
+        return jsonify({'status': 'success', 'message': 'Model updates received and processed.'}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error in submit_updates: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+
+def get_keras_model():
+        item_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='item_input')
+        user_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='user_input')
+        
+        user_embedding = tf.keras.layers.Embedding(NUM_USERS, EMBEDDING_DIM, 
+                                                   embeddings_initializer='he_normal')(user_input)
+        user_embedding = tf.keras.layers.Flatten()(user_embedding)
+        
+        item_embedding = tf.keras.layers.Embedding(NUM_ITEMS, EMBEDDING_DIM, 
+                                                   embeddings_initializer='he_normal')(item_input)
+        item_embedding = tf.keras.layers.Flatten()(item_embedding)
+        
+        concatenated = tf.keras.layers.Concatenate()([user_embedding, item_embedding])
+        dense1 = tf.keras.layers.Dense(128, activation='relu', kernel_initializer='he_normal')(concatenated)
+        bn1 = tf.keras.layers.BatchNormalization()(dense1)
+        dense2 = tf.keras.layers.Dense(128, activation='relu', kernel_initializer='he_normal')(bn1)
+        bn2 = tf.keras.layers.BatchNormalization()(dense2)
+        output = tf.keras.layers.Dense(1, activation='linear', kernel_initializer='he_normal')(bn2)
+        
+        model = tf.keras.Model(inputs=[item_input, user_input], outputs=output)
+        
+        # Assign weights to the model
+        tff.learning.models.ModelWeights.assign_weights_to(eval_state.global_model_weights, model)
+        
+        return model
+
 def load_articles_and_ratings_data(
-    data_directory: str = "/tmp",
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    data_directory: str = "data"
+    ) -> Tuple[pd.DataFrame, List[tf.data.Dataset], List[tf.data.Dataset]]:
     """Loads pandas DataFrames for ratings, articles, users from data directory."""
     
     # Define the data types for each column
@@ -124,98 +233,72 @@ def load_articles_and_ratings_data(
         'Rating': float,
         'Timestamp': str
     }
-    # Load pandas DataFrames from data directory. Assuming data is formatted as
-    # specified in UserID::ItemID::Rating::Timestamp
+    
+    # Load ratings data
     ratings_df = pd.read_csv(
-        os.path.join('data', "ratings.csv"),
+        os.path.join(data_directory, "ratings.csv"),
         sep="::",
         dtype=dtype_ratings,
-        names=["UserID", "ItemID", "Rating", "Timestamp"], engine="python")
-    # Limit the number of clients to speed up dataset creation. 
-    MAX_EXAMPLES_PER_USER = 1000
-    tf_datasets = create_tf_datasets(
-        ratings_df=ratings_df,
-        batch_size=1000)
+        names=["UserID", "ItemID", "Rating", "Timestamp"], 
+        engine="python")
     
-    # Load articles data
-    # format: ItemId::Headline::Subheadline::Author::PublishDate::Category::ThumbnailUrl
-    dtype_articles = {
-        'ItemId': int,
-        'Headline': str,
-        'Subheadline': str,
-        'Author': str,
-        'PublishDate': str,
-        'Category': str,
-        'ThumbnailUrl': str
-    }
-    articles_df = pd.read_csv(
-        os.path.join('data', "articles.csv"),
-        sep="::",
-        dtype=dtype_articles,
-        names=["ItemId","Headline","Subheadline","Author","PublishDate","Category","ThumbnailUrl"], engine="python", 
-        encoding = "ISO-8859-1")
+    # Adjust NUM_USERS and NUM_ITEMS based on data
+    global NUM_USERS, NUM_ITEMS
+    NUM_USERS = ratings_df['UserID'].nunique()
+    NUM_ITEMS = ratings_df['ItemID'].nunique()
 
-    # Split the ratings into training/val/test by client.
-    tf_train_datasets, tf_val_datasets, tf_test_datasets = split_tf_datasets(
-        tf_datasets,
-        train_fraction=0.8,
-        val_fraction=0.1)
+    # Create TensorFlow datasets
+    tf_datasets = create_tf_datasets(ratings_df, batch_size=1)
+    
+    # Split the datasets into training and validation
+    tf_train_datasets, tf_val_datasets = split_train_val_datasets(tf_datasets)
+
+    # Load articles data
+    articles_df = pd.read_csv(
+        os.path.join(data_directory, "articles.csv"),
+        sep="::",
+        names=["ItemId","Headline","Subheadline","Author","PublishDate","Category","ThumbnailUrl"], 
+        engine="python", 
+        encoding="ISO-8859-1")
 
     return articles_df, tf_train_datasets, tf_val_datasets
 
-def create_tf_datasets(ratings_df: pd.DataFrame,
-                       batch_size: int = 1) -> List[tf.data.Dataset]:
-    """Creates TF Datasets containing the articles and ratings for all users."""
+def create_tf_datasets(ratings_df: pd.DataFrame, batch_size: int = 1) -> List[tf.data.Dataset]:
     def rating_batch_map_fn(rating_batch):
-        """Maps a rating batch to an OrderedDict with tensor values."""
-        # Each example looks like: {x: article_id, y: rating}.
-        # We won't need the UserID since each client will only look at their own
-        # data.
         return collections.OrderedDict([
-            ("x", tf.cast(rating_batch[:, 0:1], tf.int64)), #ItemID
-            ("y", tf.cast(rating_batch[:, 1:2], tf.float32)) #Rating
+            ("x", tf.cast(rating_batch[:, 1:2] - 1, tf.int64)),  # ItemID (adjusted for 0-based indexing)
+            ("y", tf.cast((rating_batch[:, 2:3] - 1) / 4, tf.float32))  # Normalized Rating
         ])
-
-    tf_datasets = []
-    # Get the unique user IDs from the dataset
-    unique_user_ids = ratings_df['UserID'].unique()
     
-    for user_id in range(NUM_USERS):
-        # Get subset of ratings_df belonging to a particular user.
-        user_ratings_df = ratings_df[ratings_df.UserID == user_id]
-        
-        # Exclude any rows with missing values
-        user_ratings_df = user_ratings_df[['ItemID', 'Rating']].dropna()
-
-        tf_dataset = tf.data.Dataset.from_tensor_slices(user_ratings_df)
-
-        # Define preprocessing operations.
-        tf_dataset = tf_dataset.take(MAX_EXAMPLES_PER_USER).shuffle(
-            buffer_size=MAX_EXAMPLES_PER_USER, seed=RANDOM_SEED).batch(batch_size).map(
-            rating_batch_map_fn,
-            num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    tf_datasets = []
+    for user_id in ratings_df['UserID'].unique():
+        user_ratings = ratings_df[ratings_df['UserID'] == user_id][['UserID', 'ItemID', 'Rating']].values
+        tf_dataset = tf.data.Dataset.from_tensor_slices(user_ratings)
+        tf_dataset = tf_dataset.batch(batch_size).map(rating_batch_map_fn)
         tf_datasets.append(tf_dataset)
-
+    
     return tf_datasets
 
-
-def split_tf_datasets(
-    tf_datasets: List[tf.data.Dataset],
-    train_fraction: float = 0.8,
-    val_fraction: float = 0.1,
-) -> Tuple[List[tf.data.Dataset], List[tf.data.Dataset], List[tf.data.Dataset]]:
-    """Splits a list of user TF datasets into train/val/test by user.
-    """
-    np.random.seed(42)
-    np.random.shuffle(tf_datasets)
-
-    train_idx = int(len(tf_datasets) * train_fraction)
-    val_idx = int(len(tf_datasets) * (train_fraction + val_fraction))
-
-    # Note that the val and test data contains completely different users, not
-    # just unseen ratings from train users.
-    return (tf_datasets[:train_idx], tf_datasets[train_idx:val_idx],
-            tf_datasets[val_idx:])
+def split_train_val_datasets(tf_datasets: List[tf.data.Dataset], 
+                             train_ratio: float = 0.8) -> Tuple[List[tf.data.Dataset], List[tf.data.Dataset]]:
+    tf_train_datasets = []
+    tf_val_datasets = []
+    
+    for dataset in tf_datasets:
+        dataset_size = tf.data.experimental.cardinality(dataset).numpy()
+        if dataset_size == 0:
+            continue
+        train_size = int(train_ratio * dataset_size)
+        
+        train_dataset = dataset.take(train_size)
+        val_dataset = dataset.skip(train_size)
+        
+        if tf.data.experimental.cardinality(train_dataset).numpy() > 0:
+            tf_train_datasets.append(train_dataset)
+        if tf.data.experimental.cardinality(val_dataset).numpy() > 0:
+            tf_val_datasets.append(val_dataset)
+    
+    return tf_train_datasets, tf_val_datasets
 
 class UserEmbedding(tf.keras.layers.Layer):
     """Keras layer representing an embedding for a single user, used below."""
@@ -238,7 +321,6 @@ class UserEmbedding(tf.keras.layers.Layer):
     def compute_output_shape(self):
         return (1, self.num_latent_factors)
 
-
 def get_matrix_factorization_model(
         num_items: int,
         num_latent_factors: int) -> tff.learning.models.ReconstructionModel:
@@ -247,16 +329,13 @@ def get_matrix_factorization_model(
     # We'll pass this to `tff.learning.models.ReconstructionModel.from_keras_model_and_layers`.
     global_layers = []
     local_layers = []
-
+    
     # Extract the item embedding.
-    item_input = tf.keras.layers.Input(shape=[1], name='Item')
     item_embedding_layer = tf.keras.layers.Embedding(
         num_items,
         num_latent_factors,
         name='ItemEmbedding')
     global_layers.append(item_embedding_layer)
-    flat_item_vec = tf.keras.layers.Flatten(name='FlattenItems')(
-        item_embedding_layer(item_input))
 
     # Extract the user embedding.
     user_embedding_layer = UserEmbedding(
@@ -264,50 +343,29 @@ def get_matrix_factorization_model(
         name='UserEmbedding')
     local_layers.append(user_embedding_layer)
 
+    item_input = tf.keras.layers.Input(shape=[1], name='Item')
+
     # The item_input never gets used by the user embedding layer,
     # but this allows the model to directly use the user embedding.
     flat_user_vec = user_embedding_layer(item_input)
+    flat_item_vec = tf.keras.layers.Flatten(name='FlattenItems')(item_embedding_layer(item_input))
 
     # Compute the dot product between the user embedding, and the item one.
-    pred = tf.keras.layers.Dot(
-        1, normalize=False, name='Dot')([flat_user_vec, flat_item_vec])
+    pred = tf.keras.layers.Dot(1, normalize=False, name='Dot')([flat_user_vec, flat_item_vec])
 
     input_spec = collections.OrderedDict(
         x=tf.TensorSpec(shape=[None, 1], dtype=tf.int64),
         y=tf.TensorSpec(shape=[None, 1], dtype=tf.float32))
-
-    model = tf.keras.Model(inputs=item_input, outputs=pred)
+    
+    model = tf.keras.Model(inputs=item_input, 
+                                 outputs=pred)
 
     return tff.learning.models.ReconstructionModel.from_keras_model_and_layers(
         keras_model=model,
         global_layers=global_layers,
         local_layers=local_layers,
         input_spec=input_spec)
-
-
-class RatingAccuracy(tf.keras.metrics.Mean):
-    """Keras metric computing accuracy of reconstructed ratings."""
-
-    def __init__(self,
-                name: str='rating_accuracy',
-                **kwargs):
-        super().__init__(name=name, **kwargs)
-
-    def update_state(self,
-                    y_true: tf.Tensor,
-                    y_pred: tf.Tensor,
-                    sample_weight: Optional[tf.Tensor]=None):
-        absolute_diffs = tf.abs(y_true - y_pred)
-        # A [batch_size, 1] tf.bool tensor indicating correctness within the
-        # threshold for each example in a batch. A 0.5 threshold corresponds
-        # to correctness when predictions are rounded to the nearest whole
-        # number.
-        example_accuracies = tf.less_equal(absolute_diffs, 0.5)
-        super().update_state(example_accuracies, sample_weight=sample_weight)
-
-    loss_fn = lambda: tf.keras.losses.MeanSquaredError()
-    metrics_fn = lambda: [RatingAccuracy()]
-
+    
 # Global variables used for keeping persistent training and evaluation processes between requests
 eval_process = None
 training_process = None
@@ -322,15 +380,7 @@ def train_model(tf_train_datasets, tf_val_datasets):
     # Set the local Python execution context. This needs to be set to run TFF locally
     execution_contexts.set_sync_local_cpp_execution_context()
     
-    if eval_process is None is None:
-        # Check if running on M1/M2 Mac
-        is_m1_mac = platform.processor() == 'arm'
-        
-        if is_m1_mac:
-            optimizer = tf.keras.optimizers.legacy.SGD
-        else:
-            optimizer = tf.keras.optimizers.SGD
-        
+    if eval_process is None:
         model_fn = functools.partial(
             get_matrix_factorization_model,
             num_items=NUM_ITEMS,
@@ -338,21 +388,25 @@ def train_model(tf_train_datasets, tf_val_datasets):
             
         # Build the federated learning process
         loss_fn = lambda: tf.keras.losses.MeanSquaredError()
-        metrics_fn = lambda: [RatingAccuracy()]
+        # Update metrics_fn to include MAE and RMSE
+        metrics_fn = lambda: [
+            tf.keras.metrics.MeanAbsoluteError(name='mean_absolute_error'),
+            tf.keras.metrics.RootMeanSquaredError(name='root_mean_squared_error')
+        ]
 
         training_process = tff.learning.algorithms.build_fed_recon(
             model_fn=model_fn,
             loss_fn=loss_fn,
             metrics_fn=metrics_fn,
-            server_optimizer_fn=tff.learning.optimizers.build_sgdm(1.0),
-            client_optimizer_fn=tff.learning.optimizers.build_sgdm(0.5),
-            reconstruction_optimizer_fn=tff.learning.optimizers.build_sgdm(0.1))
+            server_optimizer_fn=tff.learning.optimizers.build_sgdm(0.001),
+            client_optimizer_fn=tff.learning.optimizers.build_sgdm(0.001),
+            reconstruction_optimizer_fn=tff.learning.optimizers.build_sgdm(0.001))
         
         eval_process = tff.learning.algorithms.build_fed_recon_eval(
             model_fn,
             loss_fn=loss_fn,
             metrics_fn=metrics_fn,
-            reconstruction_optimizer_fn=tff.learning.optimizers.build_sgdm(0.1))
+            reconstruction_optimizer_fn=tff.learning.optimizers.build_sgdm(0.001))
 
         # Initialize the training process state
         training_state = training_process.initialize()
@@ -361,231 +415,85 @@ def train_model(tf_train_datasets, tf_val_datasets):
         eval_state = eval_process.initialize()
         eval_process.set_model_weights(eval_state, training_model_weights)
     
+    # Initialize lists to track metrics
     train_losses = []
-    train_accs = []
+    train_maes = []
+    train_rmses = []
+    val_losses = []
+    val_maes = []
+    val_rmses = []
     
-    # Train the model
+    # Initialize early stopping variables
+    best_val_loss = float('inf')
+    best_training_state = None
+    best_eval_state = None
+    epochs_without_improvement = 0
+
+    # Set your patience level (number of epochs to wait for improvement)
+    patience = PATIENCE  # Ensure PATIENCE is defined globally or set it here
+
+    num_available_clients = len(tf_train_datasets)
+    num_clients_per_round = min(NUM_CLIENTS_PER_ROUND, num_available_clients)
+
     for i in range(NUM_EPOCHS):
-        federated_train_data = np.random.choice(tf_train_datasets, size=50, replace=False).tolist()
-        training_state, metrics = training_process.next(training_state, federated_train_data)
-        print(f'Train round {i}:', metrics['client_work']['train'])
-        train_losses.append(metrics['client_work']['train']['loss'])
-        train_accs.append(metrics['client_work']['train']['rating_accuracy'])
+        # Ensure clients have data
+        federated_train_data = [dataset for dataset in tf_train_datasets if len(dataset) > 0]
+        federated_train_data = np.random.choice(
+            federated_train_data, size=num_clients_per_round, replace=False).tolist()
         
-    # Set the model weights in the evaluation process
-    eval_state = eval_process.set_model_weights(
-        eval_state, training_process.get_model_weights(training_state))
-    # Evaluate the model
-    eval_state, eval_metrics = eval_process.next(eval_state, tf_val_datasets)
+        training_state, metrics = training_process.next(training_state, federated_train_data)
+        # Extract training metrics
+        train_metrics = metrics['client_work']['train']
+        train_losses.append(train_metrics.get('loss', 0))
+        train_maes.append(train_metrics.get('mean_absolute_error', 0))
+        train_rmses.append(train_metrics.get('root_mean_squared_error', 0))
+        
+        # Evaluate the model after each epoch
+        eval_state = eval_process.set_model_weights(
+            eval_state, training_process.get_model_weights(training_state))
+        eval_state, eval_metrics = eval_process.next(eval_state, tf_val_datasets)
+        # Extract validation metrics
+        val_metrics = eval_metrics['client_work']['eval']['current_round_metrics']
+        val_loss = val_metrics.get('loss', 0)
+        val_mae = val_metrics.get('mean_absolute_error', 0)
+        val_rmse = val_metrics.get('root_mean_squared_error', 0)
+        val_losses.append(val_loss)
+        val_maes.append(val_mae)
+        val_rmses.append(val_rmse)
+        
+        # Early stopping logic
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_training_state = training_state
+            best_eval_state = eval_state
+            epochs_without_improvement = 0
+            print(f'Epoch {i+1}: Validation loss improved to {best_val_loss:.4f}')
+        else:
+            epochs_without_improvement += 1
+            print(f'Epoch {i+1}: No improvement in validation loss for {epochs_without_improvement} epochs.')
+            if epochs_without_improvement >= patience:
+                print('Early stopping triggered.')
+                # Restore the best model weights
+                training_state = best_training_state
+                eval_state = best_eval_state
+                break
     
-    return eval_state, eval_metrics
+    # Prepare the metrics to return
+    metrics = {
+        'train_losses': train_losses,
+        'train_maes': train_maes,
+        'train_rmses': train_rmses,
+        'val_losses': val_losses,
+        'val_maes': val_maes,
+        'val_rmses': val_rmses
+    }
+    
+    pprint.pprint(metrics)
+    
+    return training_state, eval_state, metrics
 
 # Store user permissions
 user_permissions = {}
-
-
-def load_validation_data():
-    """
-    Load or generate validation data that includes user interactions.
-    """
-    # Example validation data with user IDs, article IDs, and labels indicating interactions
-    num_samples = 1000
-    user_ids = np.random.randint(0, NUM_USERS, size=(num_samples, 1))
-    item_ids = np.random.randint(0, NUM_ITEMS, size=(num_samples, 1))
-    labels = np.random.randint(0, 2, size=(num_samples, 1))  # 1 if the user interacted with the article, else 0
-
-    dataset = tf.data.Dataset.from_tensor_slices((
-        {'user_input': user_ids, 'item_input': item_ids},
-        labels
-    ))
-    dataset = dataset.batch(32).prefetch(tf.data.AUTOTUNE)
-    return dataset
-
-
-def compute_recommender_metrics(model, validation_dataset):
-    """
-    Compute recommender system metrics.
-    """
-    all_labels = []
-    all_predictions = []
-    all_user_ids = []
-    all_item_ids = []
-
-    for batch in validation_dataset:
-        inputs, labels = batch
-        predictions = model.predict(inputs, verbose=0).flatten()
-        all_labels.extend(labels.numpy().flatten())
-        all_predictions.extend(predictions)
-        all_user_ids.extend(inputs['user_input'].numpy().flatten())
-        all_item_ids.extend(inputs['item_input'].numpy().flatten())
-
-    # Organize data by user
-    user_data = {}
-    for user_id, item_id, label, prediction in zip(all_user_ids, all_item_ids, all_labels, all_predictions):
-        if user_id not in user_data:
-            user_data[user_id] = {'labels': {}, 'predictions': {}}
-        user_data[user_id]['labels'][item_id] = label
-        user_data[user_id]['predictions'][item_id] = prediction
-
-    # Compute metrics
-    precision_at_k = []
-    recall_at_k = []
-    ndcg_at_k = []
-
-    for user_id, data in user_data.items():
-        labels = data['labels']
-        predictions = data['predictions']
-
-        # Get the list of articles sorted by predicted score
-        ranked_items = sorted(predictions.items(), key=lambda x: x[1], reverse=True)
-        top_k_items = [item_id for item_id, _ in ranked_items[:TOP_K]]
-
-        # Relevant articles are those with label == 1
-        relevant_items = [item_id for item_id, label in labels.items() if label == 1]
-
-        # Compute Precision@K
-        num_relevant_in_top_k = sum([1 for item_id in top_k_items if labels.get(item_id, 0) == 1])
-        precision = num_relevant_in_top_k / TOP_K if TOP_K > 0 else 0
-        precision_at_k.append(precision)
-
-        # Compute Recall@K
-        num_relevant = len(relevant_items)
-        recall = num_relevant_in_top_k / num_relevant if num_relevant > 0 else 0
-        recall_at_k.append(recall)
-
-        # Compute NDCG@K
-        dcg = 0.0
-        idcg = 0.0
-        for i, item_id in enumerate(top_k_items):
-            rel = labels.get(item_id, 0)
-            dcg += (2 ** rel - 1) / np.log2(i + 2)  # i + 2 because index starts at 0
-
-        # Ideal DCG
-        sorted_relevances = sorted([label for label in labels.values()], reverse=True)
-        for i, rel in enumerate(sorted_relevances[:TOP_K]):
-            idcg += (2 ** rel - 1) / np.log2(i + 2)
-
-        ndcg = dcg / idcg if idcg > 0 else 0
-        ndcg_at_k.append(ndcg)
-
-    # Aggregate metrics
-    metrics = {
-        'precision_at_k': np.mean(precision_at_k),
-        'recall_at_k': np.mean(recall_at_k),
-        'ndcg_at_k': np.mean(ndcg_at_k)
-    }
-    return metrics
-
-client_datasets = []
-
-@app.route('/submit_updates', methods=['POST'])
-def submit_updates():
-    global state
-    global global_model
-    global client_datasets
-    
-    execution_contexts.set_sync_local_cpp_execution_context()
-    try:
-        global state
-        global global_model
-        global client_datasets
-        print("submitting updates")
-        
-        # Receive model updates and permissions from the client
-        user_id = request.form['user_id']
-        permissions = json.loads(request.form['permissions'])
-        
-        # Store user permissions
-        user_permissions[user_id] = permissions
-
-        # Save the uploaded file to a temporary directory
-        model_file = request.files['model']
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_model_path = os.path.join(temp_dir, 'local_model.keras')
-            model_file.save(temp_model_path)
-            
-            # Load the model with custom_objects if needed
-            server_model = keras.models.load_model(
-                temp_model_path,
-                compile=False,
-                custom_objects={'UserEmbedding': UserEmbedding}
-            )
-            
-            # Compile the model with a desired optimizer and loss function
-            server_model.compile(optimizer='sgd', loss='mean_squared_error')
-
-        # Convert the updated model to a TFF dataset
-        client_dataset = tf_model_to_dataset(server_model)
-        client_datasets.append(client_dataset)
-
-        # Initialize default metrics
-        global_model_loss = None
-        global_model_accuracy = None
-        recommender_metrics = {}
-
-        # Check if enough client updates have been collected to perform aggregation
-        if len(client_datasets) >= NUM_CLIENTS_PER_ROUND:
-            print("Aggregating client updates...")
-            
-            # Perform federated learning round
-            state, metrics = global_model.next(state, client_datasets)
-
-            # Extract metrics
-            global_model_loss = metrics['loss']
-            global_model_accuracy = metrics['accuracy']
-
-            # Reconstruct the Keras model using model_fn
-            _, server_model = model_fn()
-            
-            # Assign the updated weights to the model
-            tff.learning.models.ModelWeights.assign_weights_to(state.global_model_weights, server_model)
-
-            # Compute recommender system metrics
-            validation_dataset = load_validation_data()
-            recommender_metrics = compute_recommender_metrics(server_model, validation_dataset)
-            
-            # Clear the client datasets list for the next round
-            client_datasets = []
-            
-            # Save the model to a file
-            server_model.save(GLOBAL_MODEL_PATH)
-            print("Global model updated.")
-
-        # Extract relevant metrics to send back to the client
-        client_metrics = {
-            'status': 'Model updates received and processed.',
-            'global_model_loss': global_model_loss,
-            'global_model_accuracy': global_model_accuracy,
-            'global_model_precision_at_k': recommender_metrics.get('precision_at_k'),
-            'global_model_recall_at_k': recommender_metrics.get('recall_at_k'),
-            'global_model_ndcg_at_k': recommender_metrics.get('ndcg_at_k'),
-        }
-
-        # Serialize the response data, ensuring no newlines
-        response_json = json.dumps({
-            'status': 'success',
-            'message': 'Model updates received and processed.',
-            'metrics': client_metrics
-        }).replace('\n', '')
-
-        # Load the saved model file into a BytesIO buffer
-        with open(GLOBAL_MODEL_PATH, 'rb') as f:
-            model_buffer = io.BytesIO(f.read())
-
-        # Reset the buffer's position to the beginning
-        model_buffer.seek(0)
-
-        return send_file(
-            model_buffer,
-            as_attachment=True,
-            download_name='global_model.keras',
-            mimetype='application/octet-stream'
-        ), 200, {'X-Response-Data': response_json}
-
-    except Exception as e:
-        app.logger.error(f"Error in submit_updates: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
 
 def tf_model_to_dataset(model):
     """Convert a TensorFlow model to a TFF dataset."""
@@ -598,8 +506,7 @@ def tf_model_to_dataset(model):
     dataset = tf.data.Dataset.from_tensor_slices(flattened_weights)
     
     # Batch the dataset
-    return dataset.batch(1000)  # Adjust batch size as needed
-
+    return dataset.batch(100)  # Adjust batch size as needed
 
 if __name__ == '__main__':
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
