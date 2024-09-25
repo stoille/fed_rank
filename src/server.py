@@ -27,7 +27,7 @@ GLOBAL_MODEL_PATH = os.path.join('data', 'global_model.keras')
 NUM_EPOCHS = int(os.environ.get('NUM_EPOCHS', 100))
 PATIENCE = int(os.environ.get('PATIENCE', 3))
 MOMENTUM = float(os.environ.get('MOMENTUM', 0.96))
-app = Flask(__name__)
+LEARNING_RATE = float(os.environ.get('LEARNING_RATE', 0.005))
 
 # Constants
 NUM_USERS = int(os.getenv('NUM_USERS', '100'))
@@ -42,6 +42,8 @@ RANDOM_SEED = 42
 NUM_CLIENTS_PER_ROUND = 3  # Adjust this number based on your requirements
 MAX_EXAMPLES_PER_USER = 100
 
+app = Flask(__name__)
+
 @app.route('/feed', methods=['POST'])
 def feed():
     print("initiating feed")
@@ -51,7 +53,7 @@ def feed():
     global candidate_items
     
     # Load the ratings data
-    articles_df, tf_train_datasets, tf_val_datasets = load_articles_and_ratings_data()  
+    articles_df, ratings_df, tf_train_datasets, tf_val_datasets = load_articles_and_ratings_data()  
     
     # Train the model
     training_state, eval_state, train_metrics = train_model(tf_train_datasets, tf_val_datasets)
@@ -113,7 +115,7 @@ def feed():
     return send_file(
         model_buffer,
         as_attachment=True,
-        download_name='global_model.keras',
+        download_name='server_model.keras',
         mimetype='application/octet-stream'
     ), 200, {'X-Response-Data': json.dumps(response_data)}
 
@@ -196,34 +198,44 @@ def submit_updates():
     
 
 def get_keras_model():
-        item_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='item_input')
-        user_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='user_input')
-        
-        user_embedding = tf.keras.layers.Embedding(NUM_USERS, EMBEDDING_DIM, 
-                                                   embeddings_initializer='he_normal')(user_input)
-        user_embedding = tf.keras.layers.Flatten()(user_embedding)
-        
-        item_embedding = tf.keras.layers.Embedding(NUM_ITEMS, EMBEDDING_DIM, 
-                                                   embeddings_initializer='he_normal')(item_input)
-        item_embedding = tf.keras.layers.Flatten()(item_embedding)
-        
-        concatenated = tf.keras.layers.Concatenate()([user_embedding, item_embedding])
-        dense1 = tf.keras.layers.Dense(128, activation='relu', kernel_initializer='he_normal')(concatenated)
-        bn1 = tf.keras.layers.BatchNormalization()(dense1)
-        dense2 = tf.keras.layers.Dense(128, activation='relu', kernel_initializer='he_normal')(bn1)
-        bn2 = tf.keras.layers.BatchNormalization()(dense2)
-        output = tf.keras.layers.Dense(1, activation='linear', kernel_initializer='he_normal')(bn2)
-        
-        model = tf.keras.Model(inputs=[item_input, user_input], outputs=output)
-        
-        # Assign weights to the model
-        tff.learning.models.ModelWeights.assign_weights_to(eval_state.global_model_weights, model)
-        
-        return model
+    global NUM_ITEMS
+    global NUM_USERS
+    global EMBEDDING_DIM
+    
+    item_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='item_input')
+    user_input = tf.keras.Input(shape=(1,), dtype=tf.int32, name='user_input')
+
+    item_embedding_layer = tf.keras.layers.Embedding(
+        input_dim=NUM_ITEMS,
+        output_dim=EMBEDDING_DIM,
+        embeddings_initializer='he_normal'
+    )
+    user_embedding_layer = tf.keras.layers.Embedding(
+        input_dim=NUM_USERS,
+        output_dim=EMBEDDING_DIM,
+        embeddings_initializer='he_normal'
+    )
+
+    item_embedding = item_embedding_layer(item_input)
+    user_embedding = user_embedding_layer(user_input)
+    
+    concatenated = tf.keras.layers.Concatenate()([user_embedding, item_embedding])
+    dense1 = tf.keras.layers.Dense(128, activation='relu', kernel_initializer='he_normal')(concatenated)
+    bn1 = tf.keras.layers.BatchNormalization()(dense1)
+    dense2 = tf.keras.layers.Dense(128, activation='relu', kernel_initializer='he_normal')(bn1)
+    bn2 = tf.keras.layers.BatchNormalization()(dense2)
+    output = tf.keras.layers.Dense(1, activation='linear', kernel_initializer='he_normal')(bn2)
+    
+    model = tf.keras.Model(inputs=[item_input, user_input], outputs=output)
+    
+    # Assign weights to the model
+    tff.learning.models.ModelWeights.assign_weights_to(eval_state.global_model_weights, model)
+    
+    return model
 
 def load_articles_and_ratings_data(
     data_directory: str = "data"
-    ) -> Tuple[pd.DataFrame, List[tf.data.Dataset], List[tf.data.Dataset]]:
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, List[tf.data.Dataset], List[tf.data.Dataset]]:
     """Loads pandas DataFrames for ratings, articles, users from data directory."""
     
     # Define the data types for each column
@@ -242,11 +254,6 @@ def load_articles_and_ratings_data(
         names=["UserID", "ItemID", "Rating", "Timestamp"], 
         engine="python")
     
-    # Adjust NUM_USERS and NUM_ITEMS based on data
-    global NUM_USERS, NUM_ITEMS
-    NUM_USERS = ratings_df['UserID'].nunique()
-    NUM_ITEMS = ratings_df['ItemID'].nunique()
-
     # Create TensorFlow datasets
     tf_datasets = create_tf_datasets(ratings_df, batch_size=1)
     
@@ -261,13 +268,13 @@ def load_articles_and_ratings_data(
         engine="python", 
         encoding="ISO-8859-1")
 
-    return articles_df, tf_train_datasets, tf_val_datasets
+    return articles_df, ratings_df, tf_train_datasets, tf_val_datasets
 
 def create_tf_datasets(ratings_df: pd.DataFrame, batch_size: int = 1) -> List[tf.data.Dataset]:
     def rating_batch_map_fn(rating_batch):
         return collections.OrderedDict([
             ("x", tf.cast(rating_batch[:, 1:2] - 1, tf.int64)),  # ItemID (adjusted for 0-based indexing)
-            ("y", tf.cast((rating_batch[:, 2:3] - 1) / 4, tf.float32))  # Normalized Rating
+            ("y", tf.cast((rating_batch[:, 2:3]) / 4, tf.float32))  # Normalized Rating
         ])
     
     tf_datasets = []
@@ -398,15 +405,15 @@ def train_model(tf_train_datasets, tf_val_datasets):
             model_fn=model_fn,
             loss_fn=loss_fn,
             metrics_fn=metrics_fn,
-            server_optimizer_fn=tff.learning.optimizers.build_sgdm(0.001),
-            client_optimizer_fn=tff.learning.optimizers.build_sgdm(0.001),
-            reconstruction_optimizer_fn=tff.learning.optimizers.build_sgdm(0.001))
+            server_optimizer_fn=tff.learning.optimizers.build_sgdm(LEARNING_RATE),
+            client_optimizer_fn=tff.learning.optimizers.build_sgdm(LEARNING_RATE),
+            reconstruction_optimizer_fn=tff.learning.optimizers.build_sgdm(LEARNING_RATE))
         
         eval_process = tff.learning.algorithms.build_fed_recon_eval(
             model_fn,
             loss_fn=loss_fn,
             metrics_fn=metrics_fn,
-            reconstruction_optimizer_fn=tff.learning.optimizers.build_sgdm(0.001))
+            reconstruction_optimizer_fn=tff.learning.optimizers.build_sgdm(LEARNING_RATE))
 
         # Initialize the training process state
         training_state = training_process.initialize()
